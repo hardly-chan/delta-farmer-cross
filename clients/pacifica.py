@@ -10,15 +10,25 @@ import base58
 from pydantic import AliasChoices, BaseModel, Field
 from solders.keypair import Keypair
 
-from strategy.trading import Order, Position, Side, TradingClient
+from strategy.trading import Order, OrderStatus, Position, Side, TradingClient
 from utils import helpers as utils
 from utils.decorators import bind_log_context, ttl_cache
 from utils.http import ApiError, AsyncHttp, HttpMethod
-from utils.logger import logger
 
 API_URL = "https://api.pacifica.fi/api/v1"
 APP_URL = "https://app.pacifica.fi"
+
 DEFAULT_SLIPPAGE = Decimal("0.5")
+
+
+# https://pacifica.gitbook.io/closed-alpha/api-documentation/api/rest-api/orders/get-order-history
+def to_domain_status(s: str) -> OrderStatus:
+    s = s.lower()
+    if s == "filled":
+        return OrderStatus.FILLED
+    if s in ("cancelled", "canceled", "rejected"):
+        return OrderStatus.CANCELED
+    return OrderStatus.OPEN
 
 
 class AccountInfo(BaseModel):
@@ -173,9 +183,13 @@ class Client:
         res = await self._call("GET", "/info")
         return res["data"]
 
-    async def get_price(self, symbol: str) -> Decimal:
+    async def get_bbo(self, symbol: str) -> tuple[Decimal, Decimal]:
         bids, asks = await self.order_book(symbol)
-        return (asks[0].price + bids[0].price) / 2
+        return bids[0].price, asks[0].price
+
+    async def get_price(self, symbol: str) -> Decimal:
+        bid, ask = await self.get_bbo(symbol)
+        return (bid + ask) / 2
 
     async def get_lot_size(self, symbol: str) -> Decimal:
         items = await self._info()
@@ -244,7 +258,7 @@ class Client:
                 size=raw.initial_amount,
                 filled=raw.filled_amount,
                 price=raw.price,
-                status=raw.status,
+                status=to_domain_status(raw.status),
                 reduce_only=raw.reduce_only,
             )
         except Exception:
@@ -253,7 +267,6 @@ class Client:
     async def market_order(self, symbol: str, side: Side, qty: Decimal, reduce_only=False) -> Order:
         lot_size = await self.get_lot_size(symbol)
         amount = utils.round_to_tick_size(qty, lot_size)
-        logger.debug(f"Market {side} order: {amount} {symbol}")
 
         dat = {
             "symbol": symbol,
@@ -278,7 +291,6 @@ class Client:
         lot_size = await self.get_lot_size(symbol)
         price = utils.round_to_tick_size(price, tick_size)
         amount = utils.round_to_tick_size(qty, lot_size)
-        logger.debug(f"Limit {side} order: {amount} {symbol} @ {price}")
 
         dat = {
             "symbol": symbol,

@@ -9,11 +9,15 @@ from curl_cffi.requests.session import HttpMethod  # noqa: F401
 from .helpers import pickle_dump, pickle_load
 from .logger import logger
 
-__all__ = ["ApiError", "AsyncHttp", "HttpMethod", "parse_proxy"]
+__all__ = ["ApiError", "FatalError", "AsyncHttp", "HttpMethod", "parse_proxy"]
 
 
 class ApiError(Exception):
-    pass
+    """Transient API or network error — safe to retry."""
+
+
+class FatalError(Exception):
+    """Non-recoverable error that should stop the bot immediately."""
 
 
 def _cookies_hash(jar: dict) -> str:

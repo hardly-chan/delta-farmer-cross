@@ -8,7 +8,7 @@ from eth_account import Account
 from eth_account.messages import encode_defunct
 from pydantic import AliasPath, BaseModel, Field
 
-from strategy.trading import Order, Position, Side, TradingClient
+from strategy.trading import Order, OrderStatus, Position, Side, TradingClient
 from utils import helpers as utils
 from utils.decorators import bind_log_context, retry
 from utils.http import ApiError, AsyncHttp, HttpMethod
@@ -188,6 +188,10 @@ class Client:
         res = await self._call("POST", "/quotes/indicative", json=pld)
         return IndicativeQuote(**res)
 
+    async def get_bbo(self, symbol: str) -> tuple[Decimal, Decimal]:
+        q = await self._quote(symbol, 1)
+        return q.bid, q.ask
+
     async def get_price(self, symbol: str) -> Decimal:
         return (await self._quote(symbol, 1)).mark_price
 
@@ -270,7 +274,7 @@ class Client:
             size=qty,
             filled=qty,
             price=None,
-            status="filled",
+            status=OrderStatus.FILLED,
             reduce_only=reduce_only,
         )
 

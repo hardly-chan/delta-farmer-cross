@@ -11,7 +11,8 @@ from pydantic import BaseModel, Field, SecretStr, field_validator
 from clients.omni import Client, PointsRecord
 from strategy.models import StrategyConfig, load_config
 from strategy.strategy import DeltaStrategy
-from utils.cli import create_cli
+from strategy.trading import close_all
+from utils.cli import create_cli, run_app
 from utils.crypto import decrypt_value, is_encrypted
 from utils.helpers import parse_filter, short_addr, to_period_day, to_period_week
 from utils.store import DataStore
@@ -159,14 +160,6 @@ async def print_stats(accs: list[Client], period="week", filter_period="all", fo
     tbl.print()
 
 
-async def close_all(cfg: Config):
-    clients = load_trading_clients(cfg)
-    for client in clients:
-        await client.warmup()
-        await client.cancel_all_orders()
-        await client.close_all_positions()
-
-
 async def main():
     cli = create_cli("omni", "configs/omni.toml", ["privkey"])
 
@@ -178,15 +171,11 @@ async def main():
             await print_info(accs)
         case "stats":
             await print_stats(accs, period=cli.group, filter_period=cli.filter, force=cli.sync)
-        case "trade":
-            strategy = DeltaStrategy(cfg, load_trading_clients(cfg))
-            await strategy.run()
         case "close":
-            await close_all(cfg)
+            await close_all(load_trading_clients(cfg))
+        case "trade":
+            await DeltaStrategy(cfg, load_trading_clients(cfg)).run()
 
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        pass
+    run_app(main())

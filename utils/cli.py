@@ -1,12 +1,16 @@
 # delta-farmer | https://github.com/vladkens/delta-farmer
 # Copyright (c) vladkens | MIT License | It's not a bug, it's undocumented behavior
 import argparse
+import asyncio
 import glob
 import os
 import re
 import sys
+from collections.abc import Coroutine
 
 from .crypto import config_cli_parser
+from .http import FatalError
+from .logger import logger
 
 
 def _get_version() -> str:
@@ -69,3 +73,12 @@ def create_cli(name: str, config_path: str, sec_fields: list[str]) -> argparse.N
         exit(0)
 
     return args
+
+
+def run_app(coro: Coroutine) -> None:
+    try:
+        asyncio.run(coro)
+    except FatalError as e:
+        logger.error(str(e))
+    except KeyboardInterrupt:
+        pass

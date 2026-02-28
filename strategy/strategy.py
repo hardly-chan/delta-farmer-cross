@@ -17,6 +17,7 @@ from strategy.trading import (
     usd_to_qty,
 )
 from utils import helpers as utils
+from utils.http import FatalError
 from utils.logger import logger
 
 
@@ -56,6 +57,8 @@ class DeltaStrategy:
                 wait_sec = self.cfg.trade_cooldown.sample()
                 logger.info(utils.wait_msg(wait_sec))
                 await asyncio.sleep(wait_sec)
+            except FatalError:
+                raise
             except Exception as e:
                 logger.warning(f"Trade cycle failed {type(e)}: {e}")
                 await self.close_all()
@@ -64,17 +67,21 @@ class DeltaStrategy:
     async def run(self):
         """Main entry point."""
         if not (2 <= len(self.accounts) <= 5):
-            logger.error(f"Accounts for trading must be between 2 and 5, got {len(self.accounts)}")
-            exit(1)
+            raise FatalError(
+                f"Accounts for trading must be between 2 and 5, got {len(self.accounts)}"
+            )
 
         # Warmup all accounts to avoid captcha & check registration before starting trading loop
         await self.warmup()
         bals = await self.get_balances()
         self.initial_bal = sum(bal for _, bal in bals)
 
+        # In case network or exchange hiccups, don't just fail but wait and retry
         while True:
             try:
                 await self._loop()
+            except FatalError:
+                raise
             except Exception as e:
                 wait_sec = 60 * 3
                 logger.error(f"Trade failed with {type(e)}: {e} - {utils.wait_msg(wait_sec)}")
@@ -238,14 +245,12 @@ class DeltaStrategy:
         rs = await asyncio.gather(*[a.warmup() for a in self.accounts], return_exceptions=True)
         rs = [a.name for a, r in zip(self.accounts, rs) if isinstance(r, Exception)]
         if rs:
-            logger.error(f"Warmup failed: {', '.join(rs)}")
-            exit(1)
+            raise FatalError(f"Warmup failed: {', '.join(rs)}")
 
         rs = await asyncio.gather(*[a.registered() for a in self.accounts], return_exceptions=True)
         rs = [a.name for a, r in zip(self.accounts, rs) if isinstance(r, Exception) or r is False]
         if rs:
-            logger.error(f"Not registered: {', '.join(rs)}")
-            exit(1)
+            raise FatalError(f"Not registered: {', '.join(rs)}")
 
     async def get_balances(self) -> list[tuple[str, float]]:
         """Get balances for all accounts."""

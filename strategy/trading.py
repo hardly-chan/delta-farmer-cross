@@ -2,7 +2,9 @@
 # Copyright (c) vladkens | MIT License | Warning: May cause enlightenment
 import asyncio
 import time
+from collections.abc import Sequence
 from decimal import Decimal
+from enum import StrEnum
 from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel
@@ -11,6 +13,12 @@ from utils.helpers import round_to_tick_size
 from utils.logger import logger
 
 Side = Literal["bid", "ask"]
+
+
+class OrderStatus(StrEnum):
+    OPEN = "open"  # active on book (new / pending / partial)
+    FILLED = "filled"  # fully filled
+    CANCELED = "canceled"  # canceled, expired, or rejected
 
 
 class Position(BaseModel):
@@ -33,7 +41,7 @@ class Order(BaseModel):
     size: Decimal  # total size
     filled: Decimal  # filled size
     price: Decimal | None  # None for market orders
-    status: str  # open, filled, cancelled, etc. # TODO: should be known set of common statuses
+    status: OrderStatus
     reduce_only: bool = False
 
 
@@ -51,6 +59,7 @@ class TradingClient(Protocol):
     async def balance(self) -> Decimal: ...
 
     # Price & conversion
+    async def get_bbo(self, symbol: str) -> tuple[Decimal, Decimal]: ...  # (best_bid, best_ask)
     async def get_price(self, symbol: str) -> Decimal: ...
     async def get_lot_size(self, symbol: str) -> Decimal:
         """Minimum quantity increment (e.g. 0.0001 BTC)."""
@@ -96,6 +105,15 @@ class TradingClient(Protocol):
 # Utility functions (not in protocol)
 
 
+async def close_all(clients: Sequence[TradingClient]) -> None:
+    """Warmup, cancel all orders, and close all positions for a list of clients."""
+    for client in clients:
+        await client.warmup()
+        count1 = await client.cancel_all_orders()
+        count2 = await client.close_all_positions()
+        logger.info(f"{client.name}: Canceled {count1} orders, closed {count2} positions")
+
+
 def usd_to_qty(usd: Decimal, price: Decimal, lot_size: Decimal) -> Decimal:
     """Convert USD amount to quantity, rounded to lot size."""
     qty = usd / price
@@ -116,15 +134,15 @@ async def limit_order_and_wait(
     reduce_only=False,
     timeout=60,
     use_market_fallback=True,
-    slippage=Decimal("0.0005"),
 ) -> Order | None:
     """Place limit order and wait for fill with optional market fallback."""
     if price is None:
         tick_size = await client.get_tick_size(symbol)
-        last_price = await client.get_price(symbol)
-        slip = (1 - slippage) if side == "bid" else (1 + slippage)
-        price = round_to_tick_size(last_price * slip, tick_size)
+        bid, ask = await client.get_bbo(symbol)
+        raw_price = bid if side == "bid" else ask
+        price = round_to_tick_size(raw_price, tick_size)
 
+    logger.debug(f"Limit {side} {qty} {symbol} @ {price} ({client.name})")
     order = await client.limit_order(symbol, side, qty, price, reduce_only)
     order_id = order.id
     started_at, filled_since = time.time(), None
@@ -136,12 +154,12 @@ async def limit_order_and_wait(
             logger.warning(f"Order {order_id} not found")
             return None
 
-        if order.status.lower() == "filled":
-            logger.info(f"Limit order filled in {time.time() - started_at:.1f}s")
+        if order.status == OrderStatus.FILLED:
+            logger.debug(f"Limit order filled in {time.time() - started_at:.1f}s")
             return order
 
-        if order.status.lower() in ("cancelled", "canceled", "rejected"):
-            logger.info(f"Limit order {order.status}")
+        if order.status == OrderStatus.CANCELED:
+            logger.debug(f"Limit order {order.status}")
             return None
 
         if order.filled > 0 and filled_since is None:
