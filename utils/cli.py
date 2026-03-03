@@ -49,7 +49,8 @@ def create_cli(name: str, config_path: str, sec_fields: list[str]) -> argparse.N
         "filter", nargs="?", default="all", help="Period filter (all/this/last/W05)"
     )
     stats_parser.add_argument("-g", "--group", choices=["week", "day"], default="week")
-    stats_parser.add_argument("--sync", action="store_true", help="Force sync before showing stats")
+    stats_parser.add_argument("--force", dest="force", action="store_true", help="Force stats sync")
+    stats_parser.add_argument("--sync", dest="force", action="store_true", help=argparse.SUPPRESS)
 
     handle_config = config_cli_parser(sub, fields=sec_fields)
 

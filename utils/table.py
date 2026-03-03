@@ -37,7 +37,7 @@ def _compute(col: Column, proxy: RowProxy):
 
     try:
         return col.compute(proxy)
-    except (ZeroDivisionError, decimal.DivisionUndefined):
+    except (ZeroDivisionError, decimal.InvalidOperation):
         return None
     except Exception as e:
         logger.error(f"Error computing column '{col.name}' for row {proxy._row}: {e}")
@@ -129,6 +129,9 @@ class AutoTable:
 
         for title, since, until in self._groups:
             subrows = self.rows[since:until]
+            if not subrows:
+                continue  # skip empty groups
+
             subtotals = self._compute_totals_for_rows(subrows)
 
             self._render_rows(tbl, subrows, title)

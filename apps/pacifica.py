@@ -4,18 +4,17 @@ import asyncio
 from collections import defaultdict
 from datetime import datetime, timezone
 from decimal import Decimal
-from functools import partial
 from typing import TypeVar
 
 from pydantic import BaseModel, Field, SecretStr, field_validator
 
-from clients.pacifica import Client, Trade
+from clients.pacifica import PacificaClient, PacificaPoint, PacificaTrade
 from strategy.models import StrategyConfig, load_config
 from strategy.strategy import DeltaStrategy
 from strategy.trading import close_all
 from utils.cli import create_cli, run_app
 from utils.crypto import decrypt_value, is_encrypted
-from utils.helpers import parse_filter, short_addr, to_period_day, to_period_week
+from utils.helpers import gather_accs, parse_filter, short_addr, to_period_day, to_period_week
 from utils.store import DataStore
 from utils.table import AutoTable, Column
 
@@ -46,71 +45,64 @@ class Config(StrategyConfig):
         return load_config(cls, filepath)
 
 
-def client_from_config(cfg: AccountConfig) -> Client:
-    return Client(name=cfg.name, seckey=cfg.privkey.get_secret_value(), proxy=cfg.proxy)
+# MARK: Storages
 
 
-def load_accs(cfg: Config) -> list[Client]:
-    return [client_from_config(acc) for acc in cfg.accounts]
+async def sync_trades(acc: PacificaClient, ttl: int) -> list[PacificaTrade]:
+    store_path = f".cache/pacifica_{short_addr(str(acc.keypair.pubkey()), 4, 4)}_trades.pkl"
+    store = DataStore(store_path, id_key="trade_id", model=PacificaTrade)
+    await store.sync(lambda since: acc.trades(since), ttl_sec=ttl)
+    return store.get_all()
 
 
-def load_trading_clients(cfg: Config) -> list[Client]:
-    return [client_from_config(x) for x in cfg.accounts if x.enabled]
+async def sync_points(acc: PacificaClient, ttl: int) -> list[PacificaPoint]:
+    store_path = f".cache/pacifica_{short_addr(str(acc.keypair.pubkey()), 4, 4)}_points.pkl"
+    store = DataStore(store_path, id_key="start_window", model=PacificaPoint)
+    await store.sync(lambda _: acc.points(), ttl_sec=ttl)
+    return store.get_all()
 
 
-async def print_info(accs: list[Client]):
+# MARK: Reports
+
+
+async def print_info(accs: list[PacificaClient]):
     tbl = AutoTable(
         Column("Account", justify="left"),
         Column("Address", justify="left"),
         Column("Volume", "{:,.0f}", total=sum),
         Column("Burn", "{:,.2f}", total=sum),
         Column("Points", "{:,.1f}", total=sum),
-        Column("P/Price", "{:,.2f}", compute=lambda r: r["Burn"] / r["Points"]),
+        Column("P/Price", "{:,.3f}", compute=lambda r: r["Burn"] / r["Points"]),
         Column("Balance", "{:,.2f}", total=sum),
     )
 
-    for acc in accs:
-        (eqt, pnl), vol, pts = await asyncio.gather(
-            acc.portfolio(), acc.total_volume(), acc.points()
-        )
-        tbl.add_row(
-            acc.name, short_addr(str(acc.keypair.pubkey()), 4, 4), vol, -pnl, pts.points, eqt
-        )
+    profiles = await asyncio.gather(*[acc.profile() for acc in accs])
+    for acc, p in zip(accs, profiles):
+        tbl.add_row(acc.name, p.addr, p.volume, -p.pnl, p.points, p.balance)
 
     tbl.print()
 
 
-async def sync_trades(acc: Client, ttl_sec=3600) -> list[Trade]:
-    store_path = f".cache/pacifica_{short_addr(str(acc.keypair.pubkey()), 4, 4)}_trades.pkl"
-    store = DataStore(store_path, id_key="history_id")
-
-    async def fetch_trades(since: datetime | None) -> list[dict]:
-        trades = await acc.trades(since)
-        return [t.model_dump(by_alias=True) for t in trades]
-
-    await store.sync(fetch_trades, ttl_sec=ttl_sec)
-    return [Trade(**t) for t in store.get_all()]
-
-
-async def print_stats(accs: list[Client], period="week", filter_period="all", force=False):
-    gtrades: DD[list[Trade]] = defaultdict(lambda: defaultdict(list))
+async def print_stats(accs: list[PacificaClient], period="week", filter_period="all", force=False):
+    gtrades: DD[list[PacificaTrade]] = defaultdict(lambda: defaultdict(list))
     gpoints: DD[Decimal] = defaultdict(lambda: defaultdict(Decimal))
-
-    period_fn = to_period_day if period == "day" else partial(to_period_week, genesis=GENESIS)
     ttl = 0 if force else 3600
 
-    for acc in accs:
-        trades = await sync_trades(acc, ttl)
-        for trade in trades:
-            period_key = period_fn(trade.created_at)
-            gtrades[period_key][acc.name].append(trade)
+    def period_fn(dt: datetime) -> str:
+        return to_period_day(dt) if period == "day" else to_period_week(dt, genesis=GENESIS)
 
-        points = await acc.points_history()
-        for doc in points:
-            period_key = period_fn(int(doc.start_window.timestamp() * 1000))
-            gpoints[period_key][acc.name] = doc.total_points
+    all_trades, all_points = await asyncio.gather(
+        gather_accs(accs, lambda acc: sync_trades(acc, ttl)),
+        gather_accs(accs, lambda acc: sync_points(acc, ttl)),
+    )
+    for acc, trades in zip(accs, all_trades):
+        for t in trades:
+            gtrades[period_fn(t.created_at)][acc.name].append(t)
+    for acc, pts in zip(accs, all_points):
+        for p in pts:
+            gpoints[period_fn(p.start_window)][acc.name] = p.total_points
 
-    all_periods = sorted(gtrades.keys())
+    all_periods = sorted(gtrades.keys() | gpoints.keys())
     periods_to_show = parse_filter(filter_period, all_periods)
 
     tbl = AutoTable(
@@ -119,7 +111,7 @@ async def print_stats(accs: list[Client], period="week", filter_period="all", fo
         Column("Volume", "{:,.0f}", total=sum),
         Column("Burn", "{:,.2f}", total=sum),
         Column("Points", "{:,.1f}", total=sum),
-        Column("P/Price", "{:,.2f}", compute=lambda r: r["Burn"] / r["Points"]),
+        Column("P/Price", "{:,.3f}", compute=lambda r: r["Burn"] / r["Points"]),
         Column("V/Price", "{:,.2f}", compute=lambda r: r["Burn"] / r["Volume"] * Decimal(1e5)),
         Column("Fees", "{:,.2f}", total=sum),
         Column("Fee, %", "{:.3%}", compute=lambda r: r["Fees"] / r["Volume"]),
@@ -127,36 +119,45 @@ async def print_stats(accs: list[Client], period="week", filter_period="all", fo
     )
 
     tvol = defaultdict(Decimal)
-    for period_key in periods_to_show:
-        tbl.subgroup(f"{period_key}")
-        for acc_name in sorted(gtrades[period_key].keys()):
-            trades = gtrades[period_key][acc_name]
-            points = gpoints.get(period_key, {}).get(acc_name, Decimal(0))
+    for pk in periods_to_show:
+        tbl.subgroup(f"{pk}")
+        acc_names = sorted(gtrades[pk].keys() | gpoints[pk].keys())
+        for acc_name in acc_names:
+            trades = gtrades[pk].get(acc_name, [])
+            points = gpoints[pk].get(acc_name, Decimal(0))
 
-            vol = sum(trade.amount * trade.price for trade in trades)
-            pnl = sum(trade.pnl for trade in trades)
-            fee = sum(trade.fee for trade in trades)
+            vol = sum(t.amount * t.price for t in trades)
+            pnl = sum(t.pnl for t in trades)
+            fee = sum(t.fee for t in trades)
             tvol[acc_name] += vol
             tbl.add_row(acc_name, len(trades), vol, -pnl, points, fee, tvol[acc_name])
 
     tbl.print()
 
 
+# MARK: Main
+
+
+def client_from_config(cfg: AccountConfig) -> PacificaClient:
+    return PacificaClient(name=cfg.name, seckey=cfg.privkey.get_secret_value(), proxy=cfg.proxy)
+
+
 async def main():
     cli = create_cli("pacifica", "configs/pacifica.toml", ["privkey"])
-
     cfg = Config.load(cli.config)
-    accs = load_accs(cfg)
+
+    accs = [(client_from_config(x), x.enabled) for x in cfg.accounts]
+    all_accs, act_accs = [c for c, _ in accs], [c for c, e in accs if e]
 
     match cli.command:
         case "info":
-            await print_info(accs)
+            await print_info(all_accs)
         case "stats":
-            await print_stats(accs, period=cli.group, filter_period=cli.filter, force=cli.sync)
+            await print_stats(all_accs, period=cli.group, filter_period=cli.filter, force=cli.force)
         case "close":
-            await close_all(load_trading_clients(cfg))
+            await close_all(act_accs)
         case "trade":
-            await DeltaStrategy(cfg, load_trading_clients(cfg)).run()
+            await DeltaStrategy(cfg, act_accs).run()
 
 
 if __name__ == "__main__":

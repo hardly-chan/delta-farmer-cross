@@ -45,6 +45,16 @@ class Order(BaseModel):
     reduce_only: bool = False
 
 
+class ProfileInfo(BaseModel):
+    """Account profile summary for reporting (info command)."""
+
+    addr: str  # pre-formatted display address
+    balance: Decimal
+    volume: Decimal
+    pnl: Decimal  # net realized PnL as trading pnl - fees - funding
+    points: Decimal
+
+
 @runtime_checkable
 class TradingClient(Protocol):
     """Protocol for all trading clients."""
@@ -151,15 +161,14 @@ async def limit_order_and_wait(
         await asyncio.sleep(3)
         order = await client.get_order(order_id)
         if order is None:
-            logger.warning(f"Order {order_id} not found")
-            return None
+            continue  # still open or archive lag — keep polling
 
         if order.status == OrderStatus.FILLED:
             logger.debug(f"Limit order filled in {time.time() - started_at:.1f}s")
             return order
 
         if order.status == OrderStatus.CANCELED:
-            logger.debug(f"Limit order {order.status}")
+            logger.debug(f"Limit order canceled after {time.time() - started_at:.1f}s")
             return None
 
         if order.filled > 0 and filled_since is None:

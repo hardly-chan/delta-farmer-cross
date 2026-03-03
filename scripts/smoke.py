@@ -120,13 +120,14 @@ async def smoke(client: TradingClient, symbol: str, size_usd: float) -> tuple[in
 
     # MARK: Limit order cycle
 
-    # Place bid at 50% of market price — should never fill, safe to cancel.
-    limit_px = round_to_tick_size(price * Decimal("0.5"), tick)
+    # Place bid 10% below mid — won't fill in the few seconds before cancel.
+    limit_px = round_to_tick_size(price * Decimal("0.9"), tick)
+    limit_qty = usd_to_qty(Decimal(str(size_usd)), limit_px, lot)
     lorder = None
 
     try:
         t = time.time()
-        lorder = await client.limit_order(symbol, "bid", qty, limit_px)
+        lorder = await client.limit_order(symbol, "bid", limit_qty, limit_px)
         elapsed = time.time() - t
 
         if lorder.status.lower() == "filled":
@@ -184,7 +185,7 @@ async def smoke(client: TradingClient, symbol: str, size_usd: float) -> tuple[in
 
 async def main():
     parser = argparse.ArgumentParser(prog="smoke", description="Smoke test for exchange clients")
-    parser.add_argument("exchange", choices=["ethereal", "omni", "pacifica"])
+    parser.add_argument("exchange", choices=["ethereal", "nado", "omni", "pacifica"])
     parser.add_argument("symbol", help="Symbol to test (must NOT be in config markets)")
     parser.add_argument("size", type=float, help="Trade size in USD")
     parser.add_argument(
@@ -204,6 +205,8 @@ async def main():
     match args.exchange:
         case "ethereal":
             from apps.ethereal import Config, client_from_config
+        case "nado":
+            from apps.nado import Config, client_from_config
         case "omni":
             from apps.omni import Config, client_from_config
         case "pacifica":

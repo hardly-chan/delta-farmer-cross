@@ -46,7 +46,7 @@ class DeltaStrategy:
     # MARK: Core trading flow
 
     async def _loop(self):
-        # TODO: not sure do we need to close all markets or only markets from config?
+        # todo: not sure do we need to close all markets or only markets from config?
         await self.close_all()
 
         while True:

@@ -1,5 +1,6 @@
 # delta-farmer | https://github.com/vladkens/delta-farmer
 # Copyright (c) vladkens | MIT License | It's not a bug, it's undocumented behavior
+import asyncio
 import json
 import time
 from datetime import datetime, timedelta
@@ -7,12 +8,12 @@ from decimal import Decimal
 from typing import Literal, Type, cast
 
 import base58
-from pydantic import AliasChoices, BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from solders.keypair import Keypair
 
-from strategy.trading import Order, OrderStatus, Position, Side, TradingClient
+from strategy.trading import Order, OrderStatus, Position, ProfileInfo, Side, TradingClient
 from utils import helpers as utils
-from utils.decorators import bind_log_context, ttl_cache
+from utils.decorators import bind_log_context, retry, ttl_cache
 from utils.http import ApiError, AsyncHttp, HttpMethod
 
 API_URL = "https://api.pacifica.fi/api/v1"
@@ -31,7 +32,7 @@ def to_domain_status(s: str) -> OrderStatus:
     return OrderStatus.OPEN
 
 
-class AccountInfo(BaseModel):
+class PacificaAccount(BaseModel):
     balance: Decimal
     maker_fee: Decimal
     taker_fee: Decimal
@@ -39,6 +40,12 @@ class AccountInfo(BaseModel):
     orders_count: int
     stop_orders_count: int
     total_margin_used: Decimal
+
+
+class OrderBookItem(BaseModel):
+    price: Decimal = Field(..., alias="p")
+    amount: Decimal = Field(..., alias="a")
+    orders: int = Field(..., alias="n")
 
 
 class PointsInfo(BaseModel):
@@ -50,19 +57,14 @@ class PointsInfo(BaseModel):
     rank: int
 
 
-class PointsRecord(BaseModel):
-    start_window: datetime = Field(..., alias="timestamp")
-    total_points: Decimal = Field(..., alias="total_points")
-
-
-class ApiPosition(BaseModel):
+class PacificaPosition(BaseModel):
     symbol: str
     side: Side
     amount: Decimal
     entry_price: Decimal
 
 
-class ApiOrder(BaseModel):
+class PacificaOrder(BaseModel):
     order_id: int
     symbol: str
     side: Side
@@ -80,7 +82,8 @@ class ApiOrder(BaseModel):
     status: str = Field("open", alias="order_status")
 
 
-class Trade(BaseModel):
+class PacificaTrade(BaseModel):
+    model_config = ConfigDict(validate_by_name=True, validate_by_alias=True)
     trade_id: int = Field(..., alias="history_id")
     order_id: int
     symbol: str
@@ -90,36 +93,23 @@ class Trade(BaseModel):
     fee: Decimal
     pnl: Decimal
     event_type: str
-    created_at: int
+    created_at: datetime
 
 
-class OrderBookItem(BaseModel):
-    price: Decimal = Field(..., alias="p")
-    amount: Decimal = Field(..., alias="a")
-    orders: int = Field(..., alias="n")
+class PacificaPoint(BaseModel):
+    model_config = ConfigDict(validate_by_name=True, validate_by_alias=True)
+    start_window: datetime = Field(..., alias="timestamp")
+    total_points: Decimal = Field(..., alias="total_points")
 
 
-def _sign(keypair: Keypair, op_type: str, op_data: dict):
-    dat = {
-        "type": op_type,
-        "data": op_data,
-        "timestamp": int(time.time() * 1_000),
-        "expiry_window": 5_000,
-    }
-    msg = json.dumps(dat, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    sig = base58.b58encode(bytes(keypair.sign_message(msg))).decode("ascii")
-    return {
-        "account": str(keypair.pubkey()),
-        "signature": sig,
-        "timestamp": dat["timestamp"],
-        "expiry_window": dat["expiry_window"],
-        **op_data,
-    }
+# MARK: Client
 
 
 @bind_log_context
-class Client:
-    """Pacifica trading client implementing TradingClient protocol."""
+class PacificaClient:
+    @classmethod
+    def __type_check(cls) -> Type[TradingClient]:
+        return PacificaClient
 
     def __init__(self, name: str, seckey: str, proxy: str | None = None):
         self.keypair = Keypair.from_bytes(base58.b58decode(seckey))
@@ -130,12 +120,6 @@ class Client:
             proxy=proxy,
         )
 
-    async def warmup(self) -> None:
-        pass
-
-    async def registered(self) -> bool:
-        return True
-
     async def _call(self, method: HttpMethod, path: str, **kwargs):
         rep = await self.http.request(method, path, **kwargs)
         if not rep.ok and '"success":' not in rep.text:
@@ -145,46 +129,51 @@ class Client:
             raise ApiError(res["error"])
         return res
 
-    # MARK: Account
+    def _sign(self, op_type: str, op_data: dict):
+        dat = {
+            "type": op_type,
+            "data": op_data,
+            "timestamp": int(time.time() * 1_000),
+            "expiry_window": 5_000,
+        }
+        msg = json.dumps(dat, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        sig = base58.b58encode(bytes(self.keypair.sign_message(msg))).decode("ascii")
+        return {
+            "account": str(self.keypair.pubkey()),
+            "signature": sig,
+            "timestamp": dat["timestamp"],
+            "expiry_window": dat["expiry_window"],
+            **op_data,
+        }
 
-    async def account_info(self):
-        res = await self._call("GET", f"/account?account={self.keypair.pubkey()}")
-        return AccountInfo(**res["data"])
+    # MARK: Lifecycle
 
-    async def balance(self) -> Decimal:
-        return (await self.account_info()).balance
+    async def warmup(self) -> None:
+        pass
 
-    async def points(self):
-        msg = _sign(self.keypair, "get_points", {})
-        res = await self._call("POST", "/account/points", json=msg)
-        return PointsInfo(**res["data"])
-
-    async def points_history(self):
-        msg = _sign(self.keypair, "get_points", {})
-        res = await self._call("POST", "/account/points/history", json=msg)
-        items = [PointsRecord(**x) for x in res["data"]]
-        for x in items:
-            x.start_window -= timedelta(seconds=1)
-        return items
-
-    async def total_volume(self):
-        res = await self._call("GET", f"/portfolio/volume?account={self.keypair.pubkey()}")
-        return Decimal(res["data"]["volume_all_time"])
-
-    async def portfolio(self):
-        res = await self._call("GET", f"/portfolio?account={self.keypair.pubkey()}&time_range=all")
-        res = res["data"][-1]
-        return Decimal(res["account_equity"]), Decimal(res["pnl"])
-
-    # MARK: Market data
+    async def registered(self) -> bool:
+        return True  # todo:
 
     @ttl_cache(60)
     async def _info(self):
         res = await self._call("GET", "/info")
         return res["data"]
 
+    @ttl_cache(3600)
+    async def get_symbols(self) -> list[str]:
+        items = await self._info()
+        items = sorted(items, key=lambda x: int(x.get("max_leverage", 0)), reverse=True)
+        return [x["symbol"] for x in items]
+
+    @ttl_cache(5)
+    async def _order_book(self, symbol: str, agg_level=1):
+        res = await self._call("GET", f"/book?symbol={symbol}&agg_level={agg_level}")
+        bids = [OrderBookItem(**x) for x in res["data"]["l"][0]]
+        asks = [OrderBookItem(**x) for x in res["data"]["l"][1]]
+        return bids, asks
+
     async def get_bbo(self, symbol: str) -> tuple[Decimal, Decimal]:
-        bids, asks = await self.order_book(symbol)
+        bids, asks = await self._order_book(symbol)
         return bids[0].price, asks[0].price
 
     async def get_price(self, symbol: str) -> Decimal:
@@ -204,17 +193,26 @@ class Client:
         return Decimal(item["tick_size"])
 
     @ttl_cache(5)
-    async def order_book(self, symbol: str, agg_level=1):
-        res = await self._call("GET", f"/book?symbol={symbol}&agg_level={agg_level}")
-        bids = [OrderBookItem(**x) for x in res["data"]["l"][0]]
-        asks = [OrderBookItem(**x) for x in res["data"]["l"][1]]
-        return bids, asks
+    async def balance(self) -> Decimal:
+        res = await self._call("GET", f"/account?account={self.keypair.pubkey()}")
+        res = PacificaAccount(**res["data"])
+        return res.balance
+
+    # MARK: Leverage
+
+    async def get_leverage(self, symbol: str) -> int | None:
+        return None  # todo:
+
+    async def set_leverage(self, symbol: str, leverage: int) -> None:
+        dat = {"symbol": symbol, "leverage": leverage}
+        msg = self._sign("update_leverage", dat)
+        await self._call("POST", "/account/leverage", json=msg)
 
     # MARK: Positions
 
     async def positions(self) -> list[Position]:
         res = await self._call("GET", f"/positions?account={self.keypair.pubkey()}")
-        raw = [ApiPosition(**x) for x in res["data"]]
+        raw = [PacificaPosition(**x) for x in res["data"]]
         return [
             Position(
                 id=f"{p.symbol}_{p.side}",
@@ -236,7 +234,7 @@ class Client:
 
     async def close_all_positions(self) -> int:
         res = await self._call("GET", f"/positions?account={self.keypair.pubkey()}")
-        raw = [ApiPosition(**x) for x in res["data"]]
+        raw = [PacificaPosition(**x) for x in res["data"]]
         closed = 0
         for p in raw:
             if p.amount != 0:
@@ -250,7 +248,7 @@ class Client:
     async def get_order(self, order_id: str) -> Order | None:
         try:
             res = await self._call("GET", f"/orders/history_by_id?order_id={order_id}")
-            raw = ApiOrder(**res["data"][0])
+            raw = PacificaOrder(**res["data"][0])
             return Order(
                 id=str(raw.order_id),
                 symbol=raw.symbol,
@@ -275,7 +273,7 @@ class Client:
             "slippage_percent": str(DEFAULT_SLIPPAGE),
             "reduce_only": reduce_only,
         }
-        msg = _sign(self.keypair, "create_market_order", dat)
+        msg = self._sign("create_market_order", dat)
         res = await self._call("POST", "/orders/create_market", json=msg)
         order_id = cast(int, res["data"]["order_id"])
 
@@ -300,7 +298,7 @@ class Client:
             "tif": "GTC",
             "reduce_only": reduce_only,
         }
-        msg = _sign(self.keypair, "create_order", dat)
+        msg = self._sign("create_order", dat)
         res = await self._call("POST", "/orders/create", json=msg)
         order_id = cast(int, res["data"]["order_id"])
 
@@ -312,7 +310,7 @@ class Client:
     async def cancel_order(self, order: Order) -> bool:
         try:
             dat = {"order_id": int(order.id), "symbol": order.symbol}
-            msg = _sign(self.keypair, "cancel_order", dat)
+            msg = self._sign("cancel_order", dat)
             await self._call("POST", "/orders/cancel", json=msg)
             return True
         except Exception:
@@ -324,29 +322,15 @@ class Client:
             return 0
 
         dat = {"all_symbols": True, "exclude_reduce_only": False}
-        msg = _sign(self.keypair, "cancel_all_orders", dat)
+        msg = self._sign("cancel_all_orders", dat)
         res = await self._call("POST", "/orders/cancel_all", json=msg)
         return cast(int, res["data"]["cancelled_count"])
 
-    # MARK: Trades
+    # MARK: Stats
 
-    async def get_symbols(self) -> list[str]:
-        items = await self._info()
-        items = sorted(items, key=lambda x: int(x.get("max_leverage", 0)), reverse=True)
-        return [x["symbol"] for x in items]
-
-    async def get_leverage(self, symbol: str) -> int | None:
-        return None  # no API to fetch current leverage
-
-    async def set_leverage(self, symbol: str, leverage: int) -> None:
-        dat = {"symbol": symbol, "leverage": leverage}
-        msg = _sign(self.keypair, "update_leverage", dat)
-        await self._call("POST", "/account/leverage", json=msg)
-
-    async def trades(self, since: datetime | None = None) -> list[Trade]:
-        since_ts = int(since.timestamp() * 1000) if since else None
+    async def trades(self, since: datetime | None = None) -> list[PacificaTrade]:
         has_more, cursor = True, None
-        items: dict[int, Trade] = {}
+        items: dict[int, PacificaTrade] = {}
 
         while has_more:
             url = f"/positions/history?account={self.keypair.pubkey()}&limit=1000"
@@ -356,13 +340,45 @@ class Client:
             cursor = res.get("next_cursor")
 
             for t in res["data"]:
-                t = Trade(**t)
-                if since_ts and t.created_at < since_ts:
+                t = PacificaTrade(**t)
+                if since and t.created_at < since:
                     has_more = False
                     break
                 items[t.trade_id] = t
 
         return sorted(items.values(), key=lambda x: x.created_at)
 
+    @retry()
+    async def points(self):
+        msg = self._sign("get_points", {})
+        res = await self._call("POST", "/account/points/history", json=msg)
+        items = [PacificaPoint(**x) for x in res["data"]]
+        for x in items:
+            x.start_window -= timedelta(seconds=1)
+        return items
 
-_cls_check: Type[TradingClient] = Client
+    @retry()
+    async def points_total(self):
+        msg = self._sign("get_points", {})
+        res = await self._call("POST", "/account/points", json=msg)
+        return PointsInfo(**res["data"])
+
+    async def total_volume(self):
+        res = await self._call("GET", f"/portfolio/volume?account={self.keypair.pubkey()}")
+        return Decimal(res["data"]["volume_all_time"])
+
+    async def portfolio(self):
+        res = await self._call("GET", f"/portfolio?account={self.keypair.pubkey()}&time_range=all")
+        res = res["data"][-1]
+        return Decimal(res["account_equity"]), Decimal(res["pnl"])
+
+    async def profile(self) -> ProfileInfo:
+        pts, vol = await asyncio.gather(self.points_total(), self.total_volume())
+        eqt, pnl = await self.portfolio()
+        return ProfileInfo(
+            addr=utils.short_addr(str(self.keypair.pubkey()), 4, 4),
+            balance=eqt,
+            volume=vol,
+            pnl=pnl,
+            points=pts.points,
+        )

@@ -108,13 +108,13 @@ class AsyncHttp:
 
         fullurl = self._build_url(url)
         logname = f"Http {method} {url.split('?')[0]}"
-
         max_retries, retries = 9, 0
         first_error_logged = False
         while True:
             try:
                 rep = await self.session.request(method, fullurl, **kwargs)
                 self._save_cookies()
+                logger.trace(f">> {logname} response: {rep.status_code} {rep.text}")
                 return rep
             except (errors.CurlError, errors.RequestsError) as e:
                 retries += 1
@@ -123,7 +123,7 @@ class AsyncHttp:
                     raise e
 
                 if not first_error_logged:
-                    logger.debug(f"{logname} network error, retrying...")
+                    logger.debug(f"{logname} network error ({type(e)}), retrying...")
                     first_error_logged = True
 
                 wait_sec = 0.75 * retries

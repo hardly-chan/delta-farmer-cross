@@ -1,0 +1,492 @@
+# delta-farmer | https://github.com/vladkens/delta-farmer
+# Copyright (c) vladkens | MIT License | Optimized for confusion
+import asyncio
+import random
+import time
+from datetime import datetime, timezone
+from decimal import Decimal
+from typing import Any, Type
+
+from eth_account import Account
+from eth_account.messages import encode_typed_data
+from pydantic import BaseModel
+
+from strategy.trading import Order, OrderStatus, Position, ProfileInfo, Side, TradingClient
+from utils import helpers as utils
+from utils.decorators import bind_log_context, retry, ttl_cache
+from utils.http import ApiError, AsyncHttp
+
+APP_URL = "https://app.nado.xyz"
+
+_EIP712_TYPES = {
+    "EIP712Domain": [
+        {"name": "name", "type": "string"},
+        {"name": "version", "type": "string"},
+        {"name": "chainId", "type": "uint256"},
+        {"name": "verifyingContract", "type": "address"},
+    ],
+    "Order": [
+        {"name": "sender", "type": "bytes32"},
+        {"name": "priceX18", "type": "int128"},
+        {"name": "amount", "type": "int128"},
+        {"name": "expiration", "type": "uint64"},
+        {"name": "nonce", "type": "uint64"},
+        {"name": "appendix", "type": "uint128"},
+    ],
+    "Cancellation": [
+        {"name": "sender", "type": "bytes32"},
+        {"name": "productIds", "type": "uint32[]"},
+        {"name": "digests", "type": "bytes32[]"},
+        {"name": "nonce", "type": "uint64"},
+    ],
+    "CancellationProducts": [
+        {"name": "sender", "type": "bytes32"},
+        {"name": "productIds", "type": "uint32[]"},
+        {"name": "nonce", "type": "uint64"},
+    ],
+}
+
+
+def _to_x18(v: Decimal | int | float) -> int:
+    return int(Decimal(str(v)) * Decimal("1e18"))
+
+
+def _from_x18(v: str | int) -> Decimal:
+    return Decimal(str(v)) / Decimal("1e18")
+
+
+def _build_sender(address: str, subaccount="default") -> str:
+    # bytes32 = wallet address (20 bytes) + subaccount name (12 bytes, null-padded)
+    addr = bytes.fromhex(address.removeprefix("0x"))
+    name = subaccount.encode("ascii").ljust(12, b"\x00")
+    return "0x" + (addr + name).hex()
+
+
+def _make_nonce() -> int:
+    # recv_time: 100s window (matches Nado's order_nonce formula: (ts_ms + 100000) << 20)
+    ts_ms = int(time.time() * 1000)
+    return ((ts_ms + 100_000) << 20) + random.randint(0, (1 << 20) - 1)
+
+
+def _build_appendix(order_type: int = 0, reduce_only=False) -> int:
+    # bits 0-7: version=1, bits 9-10: order_type, bit 11: reduce_only
+    v = 1 | ((order_type & 0b11) << 9)
+    if reduce_only:
+        v |= 1 << 11
+    return v
+
+
+class SymbolInfo(BaseModel):
+    product_id: int
+    symbol: str
+    size_increment: Decimal
+    price_increment: Decimal
+    min_size: Decimal
+
+
+class NadoTrade(BaseModel):
+    digest: str
+    product_id: int
+    symbol: str
+    submission_idx: int
+    side: str
+    amount: Decimal
+    price: Decimal
+    volume: Decimal  # abs(quote_filled)
+    fee: Decimal
+    realized_pnl: Decimal
+    created_at: datetime
+
+
+class NadoPoint(BaseModel):
+    epoch: int
+    description: str
+    since: datetime
+    until: datetime
+    points: Decimal
+    rank: int
+    tier: int
+
+
+@bind_log_context
+class NadoClient:
+    @classmethod
+    def __type_check(cls) -> Type[TradingClient]:
+        return NadoClient
+
+    def __init__(self, name: str, privkey: str, proxy: str | None = None):
+        self.name = name
+        self.http = AsyncHttp(
+            baseurl="https://gateway.prod.nado.xyz",
+            headers={"Origin": APP_URL, "Referer": f"{APP_URL}/"},
+            proxy=proxy,
+        )
+
+        self.account = Account.from_key(privkey)
+        self.address = str(self.account.address)
+        self.sender = _build_sender(self.address, "default")
+
+    async def _query(self, pld: dict) -> dict:
+        rep = await self.http.request("GET", "/v1/query", params=pld)
+        if not rep.ok or rep.json().get("status") != "success":
+            raise ApiError(f"Query error {rep.status_code}: {rep.text}")
+
+        return rep.json().get("data", {})
+
+    async def _execute(self, pld: dict) -> dict:
+        rep = await self.http.request("POST", "/v1/execute", json=pld)
+        if not rep.ok or rep.json().get("status") != "success":
+            raise ApiError(f"Query error {rep.status_code}: {rep.text}")
+
+        return rep.json().get("data", {})
+
+    async def _archive(self, pld: dict) -> dict:
+        rep = await self.http.request("POST", "https://archive.prod.nado.xyz/v1", json=pld)
+        if not rep.ok:
+            raise ApiError(f"Archive error {rep.status_code}: {rep.text}")
+        return rep.json()
+
+    @ttl_cache(3600)
+    @retry(max_attempts=9, delay=2.0)
+    async def endpoint_addr(self) -> str:
+        res = await self._query({"type": "contracts"})
+        return res["endpoint_addr"]
+
+    def _sign(self, primary_type: str, verifying_contract: str, message: dict[str, Any]) -> str:
+        msg = {
+            "types": {
+                "EIP712Domain": _EIP712_TYPES["EIP712Domain"],
+                primary_type: _EIP712_TYPES[primary_type],
+            },
+            "domain": {
+                "name": "Nado",
+                "version": "0.0.1",
+                "chainId": 57073,  # Nado mainnet,
+                "verifyingContract": verifying_contract,
+            },
+            "primaryType": primary_type,
+            "message": message,
+        }
+
+        msg = encode_typed_data(full_message=msg)
+        return "0x" + self.account.sign_message(msg).signature.hex()
+
+    # MARK: Lifecycle
+
+    @retry(max_attempts=9, delay=2.0)
+    async def warmup(self) -> None:
+        pass
+
+    async def registered(self) -> bool:
+        res = await self._query({"type": "subaccount_info", "subaccount": self.sender})
+        return res.get("exists", False)
+
+    @ttl_cache(5)
+    async def get_bbo(self, symbol: str) -> tuple[Decimal, Decimal]:
+        pld = {"ticker_id": f"{symbol}-PERP_USDT0", "depth": 1}
+        rep = await self.http.request("GET", "/v2/orderbook", params=pld)
+        if not rep.ok:
+            raise ApiError(f"Orderbook error for {symbol} - {rep.status_code}: {rep.text}")
+
+        data = rep.json()
+        bids = data.get("bids", [])
+        asks = data.get("asks", [])
+        if not bids or not asks:
+            raise ApiError(f"No orderbook data for {symbol}")
+
+        return Decimal(bids[0][0]), Decimal(asks[0][0])
+
+    async def get_price(self, symbol: str) -> Decimal:
+        bid, ask = await self.get_bbo(symbol)
+        return (bid + ask) / 2
+
+    @ttl_cache(3600)
+    async def symbols(self) -> list[SymbolInfo]:
+        items = await self._query({"type": "symbols"})
+        items = list(items.get("symbols", {}).values())
+        items = [x for x in items if x["type"] == "perp"]
+        return [
+            SymbolInfo(
+                product_id=x["product_id"],
+                symbol=x["symbol"].removesuffix("-PERP"),
+                size_increment=_from_x18(x["size_increment"]),
+                price_increment=_from_x18(x["price_increment_x18"]),
+                min_size=_from_x18(x["min_size"]),
+            )
+            for x in items
+        ]
+
+    @ttl_cache(3600)
+    async def get_symbols(self) -> list[str]:
+        return [s.symbol for s in await self.symbols()]
+
+    async def symbol_info(
+        self, *, symbol: str | None = None, product_id: int | None = None
+    ) -> SymbolInfo:
+        assert symbol or product_id, "Must provide symbol or product_id"
+
+        for sym in await self.symbols():
+            if (symbol and sym.symbol == symbol) or (product_id and sym.product_id == product_id):
+                return sym
+
+        raise ApiError(f"Symbol not found: symbol={symbol} product_id={product_id}")
+
+    async def get_lot_size(self, symbol: str) -> Decimal:
+        sym = await self.symbol_info(symbol=symbol)
+        return sym.size_increment
+
+    async def get_tick_size(self, symbol: str) -> Decimal:
+        sym = await self.symbol_info(symbol=symbol)
+        return sym.price_increment
+
+    @ttl_cache(5)
+    async def balance(self) -> Decimal:
+        res = await self._query({"type": "subaccount_info", "subaccount": self.sender})
+        for b in res.get("spot_balances", []):
+            if b["product_id"] == 0:
+                return _from_x18(b["balance"]["amount"])
+        return Decimal(0)
+
+    # MARK: Leverage
+
+    async def get_leverage(self, symbol: str) -> int | None:
+        # Nado uses cross margin; leverage is order-size based, not a fixed setting
+        return None
+
+    async def set_leverage(self, symbol: str, leverage: int) -> None:
+        # Not applicable for Nado cross margin
+        pass
+
+    # MARK: Orders
+
+    async def _place_order(
+        self,
+        symbol: str,
+        side: Side,
+        qty: Decimal,
+        price: Decimal,
+        order_type: int,  # 0=DEFAULT, 1=IOC
+        reduce_only: bool = False,
+    ) -> Order:
+        exp = int(time.time()) + (30 if order_type == 1 else 3600)
+        sym = await self.symbol_info(symbol=symbol)
+
+        notional = qty * price
+        if notional < sym.min_size:
+            msg = f"Order notional {notional:.2f} < min {sym.min_size:.2f} USD for {symbol}"
+            raise ApiError(msg)
+
+        nonce = _make_nonce()
+        amount = _to_x18(qty) if side == "bid" else -_to_x18(qty)
+        appendix = _build_appendix(order_type=order_type, reduce_only=reduce_only)
+
+        # uses native int types (as required by Solidity struct)
+        msg = {
+            "sender": self.sender,
+            "priceX18": _to_x18(price),
+            "amount": amount,
+            "expiration": exp,
+            "nonce": nonce,
+            "appendix": appendix,
+        }
+
+        # For place_order, verifyingContract = address(productId)
+        vct = "0x" + sym.product_id.to_bytes(20, byteorder="big").hex()
+        sig = self._sign("Order", vct, msg)
+
+        pld = {k: str(v) for k, v in msg.items()}
+        pld = {"place_order": {"product_id": sym.product_id, "order": pld, "signature": sig}}
+
+        res = await self._execute(pld)
+        assert "digest" in res, f"Unexpected place_order response: {res}"
+
+        return Order(
+            id=res["digest"],
+            symbol=symbol,
+            side=side,
+            size=qty,
+            filled=Decimal(0),
+            price=price,
+            status=OrderStatus.OPEN,
+            reduce_only=reduce_only,
+        )
+
+    async def market_order(self, symbol: str, side: Side, qty: Decimal, reduce_only=False) -> Order:
+        bid, ask = await self.get_bbo(symbol)
+        price = ask * Decimal("1.005") if side == "bid" else bid * Decimal("0.995")
+        tick = await self.get_tick_size(symbol)
+        price = utils.round_to_tick_size(price, tick)
+        return await self._place_order(
+            symbol, side, qty, price, order_type=1, reduce_only=reduce_only
+        )
+
+    async def limit_order(
+        self, symbol: str, side: Side, qty: Decimal, price: Decimal, reduce_only=False
+    ) -> Order:
+        return await self._place_order(
+            symbol, side, qty, price, order_type=0, reduce_only=reduce_only
+        )
+
+    async def get_order(self, order_id: str) -> Order | None:
+        res = await self._archive({"orders": {"digests": [order_id]}})
+        res = utils.first([x for x in res.get("orders", []) if x["digest"] == order_id])
+        if res is None:
+            return None
+
+        sym = await self.symbol_info(product_id=res["product_id"])
+        amount = _from_x18(res["amount"])
+        size = abs(amount)
+        filled = abs(_from_x18(res["base_filled"]))
+
+        return Order(
+            id=order_id,
+            symbol=sym.symbol,
+            side="bid" if amount > 0 else "ask",
+            size=size,
+            filled=filled,
+            price=_from_x18(res["price_x18"]),
+            status=OrderStatus.FILLED if filled >= size else OrderStatus.CANCELED,
+            reduce_only=False,  # todo: no way to know this?
+        )
+
+    async def cancel_order(self, order: Order) -> bool:
+        sym = await self.symbol_info(symbol=order.symbol)
+        nonce = _make_nonce()
+        msg = {
+            "sender": self.sender,
+            "productIds": [sym.product_id],
+            "digests": [order.id],
+            "nonce": nonce,
+        }
+
+        sig = self._sign("Cancellation", await self.endpoint_addr(), msg)
+        pld = {"cancel_orders": {"tx": {**msg, "nonce": str(nonce)}, "signature": sig}}
+        await self._execute(pld)
+        return True
+
+    async def cancel_all_orders(self) -> int:
+        nonce = _make_nonce()
+        msg = {"sender": self.sender, "productIds": [], "nonce": nonce}
+
+        sig = self._sign("CancellationProducts", await self.endpoint_addr(), msg)
+        pld = {"cancel_product_orders": {"tx": {**msg, "nonce": str(nonce)}, "signature": sig}}
+        res = await self._execute(pld)
+        return len(res.get("cancelled_orders", []))
+
+    # MARK: Positions
+
+    async def positions(self) -> list[Position]:
+        res = await self._query({"type": "subaccount_info", "subaccount": self.sender})
+        items: list[Position] = []
+        for b in res.get("perp_balances", []):
+            amount = _from_x18(b["balance"]["amount"])
+            if amount == 0:
+                continue
+
+            vquote = _from_x18(b["balance"].get("v_quote_balance", "0"))
+            entry_price = abs(vquote / amount) if amount != 0 else Decimal(0)
+
+            oracle_price = Decimal(0)
+            for p in res.get("perp_products", []):
+                if p.get("product_id") == b["product_id"]:
+                    oracle_price = _from_x18(p.get("oracle_price_x18", "0"))
+                    break
+
+            sym = await self.symbol_info(product_id=b["product_id"])
+            pos = Position(
+                id=str(b["product_id"]),
+                symbol=sym.symbol,
+                side="bid" if amount > 0 else "ask",
+                size=abs(amount),
+                entry_price=entry_price,
+                unrealized_pnl=amount * oracle_price + vquote,
+            )
+            items.append(pos)
+
+        return items
+
+    async def close_position(self, position: Position) -> bool:
+        close_side: Side = "ask" if position.side == "bid" else "bid"
+        await self.market_order(position.symbol, close_side, position.size, reduce_only=True)
+        return True
+
+    async def close_all_positions(self) -> int:
+        positions = await self.positions()
+        for p in positions:
+            await self.close_position(p)
+        return len(positions)
+
+    # MARK: Stats
+
+    async def trades(self, since: datetime | None = None, limit=50) -> list[NadoTrade]:
+        cursor: int | None = None
+        has_more = True
+
+        items: dict[str, NadoTrade] = {}
+        while has_more:
+            pld = {"orders": {"subaccounts": [self.sender], "limit": limit}}
+            if cursor is not None:
+                pld["orders"]["idx"] = cursor
+                await asyncio.sleep(0.3)  # be nice to the archive API when paginating
+
+            res = await self._archive(pld)
+            res = res.get("orders", [])
+            cursor = res[-1]["submission_idx"]
+            has_more = len(res) >= limit
+
+            for o in res:
+                amount = _from_x18(o["amount"])
+                created_ms = (int(o["nonce"]) >> 20) - 100_000
+                s = await self.symbol_info(product_id=o["product_id"])
+                t = NadoTrade(
+                    digest=o["digest"],
+                    product_id=o["product_id"],
+                    symbol=s.symbol,
+                    submission_idx=o["submission_idx"],
+                    side="bid" if amount > 0 else "ask",
+                    amount=abs(amount),
+                    price=_from_x18(o["price_x18"]),
+                    volume=abs(_from_x18(o["quote_filled"])),
+                    fee=_from_x18(o["fee"]),
+                    realized_pnl=_from_x18(o["realized_pnl"]),
+                    created_at=datetime.fromtimestamp(created_ms / 1000, tz=timezone.utc),
+                )
+                items[t.digest] = t
+                if since and t.created_at <= since:
+                    has_more = False
+                    break
+
+        return sorted(items.values(), key=lambda t: t.created_at)
+
+    async def points(self) -> list[NadoPoint]:
+        res = await self._archive({"nado_points": {"address": self.address}})
+
+        return [
+            NadoPoint(
+                epoch=int(x["epoch"]),
+                description=x["description"],
+                since=datetime.fromtimestamp(int(x["start_time"]), tz=timezone.utc),
+                until=datetime.fromtimestamp(int(x["end_time"]), tz=timezone.utc),
+                points=_from_x18(x["points"]),
+                rank=int(x["rank"]),
+                tier=int(x["tier"]),
+            )
+            for x in res.get("points_per_epoch") or []
+        ]
+
+    async def points_total(self) -> Decimal:
+        pts = await self.points()
+        return Decimal(sum(p.points for p in pts))
+
+    async def profile(self) -> ProfileInfo:
+        # TODO: find a faster aggregate endpoint for volume/pnl on nado API
+        bal, pts, trades = await asyncio.gather(self.balance(), self.points_total(), self.trades())
+        vol = sum((t.volume for t in trades), Decimal(0))
+        pnl = sum((t.realized_pnl - t.fee for t in trades), Decimal(0))
+        return ProfileInfo(
+            addr=utils.short_addr(self.address),
+            balance=bal,
+            volume=vol,
+            pnl=pnl,
+            points=pts,
+        )

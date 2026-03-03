@@ -1,11 +1,12 @@
 # delta-farmer | https://github.com/vladkens/delta-farmer
 # Copyright (c) vladkens | MIT License | Optimized for confusion
+import asyncio
 import json
 import os
 import pickle
 import random
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import TypeVar
 
@@ -14,6 +15,10 @@ from filelock import FileLock
 from .logger import logger
 
 T = TypeVar("T")
+
+
+async def gather_accs(accs: list[T], fn) -> list:
+    return list(await asyncio.gather(*[fn(acc) for acc in accs]))
 
 
 def first(items: list[T]) -> T | None:
@@ -56,19 +61,15 @@ def wait_msg(sec: float) -> str:
 # MARK: Period functions
 
 
-def to_period_week(ts: int, genesis: datetime) -> str:
+def to_period_week(dt: datetime, genesis: datetime) -> str:
     """Convert timestamp (ms) to week period string like W01, W02, etc."""
-    dt = datetime.fromtimestamp(ts // 1000, tz=genesis.tzinfo)
+    assert dt.tzinfo == timezone.utc, "to_period_week: dt must be in UTC timezone"
     delta = dt - genesis
     index = delta.days // 7 + 1
     return f"W{index:02d}" if index > 0 else "OFF"
 
 
-def to_period_day(ts: int) -> str:
-    """Convert timestamp (ms) to day period string like 2025-02-19."""
-    from datetime import UTC
-
-    dt = datetime.fromtimestamp(ts // 1000, tz=UTC)
+def to_period_day(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%d")
 
 
@@ -253,3 +254,17 @@ def find_safe_pair(bals: list[tuple[str, float]], size_usd: float, leverage: int
     names = [main_name] + [x[0] for x in rest]
     sizes = [main_size] + rest_size
     return [(na, round_to_tick_size(sz, tick_size)) for na, sz in zip(names, sizes)]
+
+
+# MARK: Ethereal-specific utils
+
+
+def parse_signature_type(value: str) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    for part in value.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        ftype, fname = part.rsplit(" ", 1)
+        out.append({"name": fname, "type": ftype})
+    return out

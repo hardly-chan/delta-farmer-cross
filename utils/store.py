@@ -1,36 +1,63 @@
 # delta-farmer | https://github.com/vladkens/delta-farmer
 # Copyright (c) vladkens | MIT License | Crafted with love and ctrl+c
 from datetime import UTC, datetime, timedelta
-from typing import Awaitable, Callable, Generic, TypeVar
+from typing import Awaitable, Callable, Generic, Type, TypeVar, cast
+
+from pydantic import BaseModel
 
 from .helpers import pickle_dump, pickle_load
 from .logger import logger
 
-T = TypeVar("T", bound=dict)
+T = TypeVar("T")
 FetchFn = Callable[[datetime | None], Awaitable[list[T]]]
 
 
 class DataStore(Generic[T]):
-    def __init__(self, filepath: str, id_key: str = "id"):
+    def __init__(self, filepath: str, id_key: str = "id", model: Type[T] | None = None):
         self.filepath = filepath
         self.last_dt: datetime | None = None
         self.records: dict[str, T] = {}
         self.id_key = id_key
+        self.model = model
         self._load()
 
     def _load(self):
-        if data := pickle_load(self.filepath, delete_on_error=True):
+        data = pickle_load(self.filepath, delete_on_error=True)
+        if not data:
+            return
+
+        try:
             self.last_dt = data.get("last_sync")
-            self.records = data.get("records", {})
+            raw: dict[str, dict] = data.get("records", {})
+            if self.model is not None:
+                self.records = {k: self.model.model_validate(v) for k, v in raw.items()}  # type: ignore
+            else:
+                self.records = cast(dict[str, T], raw)
+        except Exception as e:
+            logger.warning(f"Failed to deserialize {self.filepath.split('/')[-1]}, dropping data")
+            logger.error(e)
+            exit(0)
+            self.last_dt = None
+            self.records = {}
 
     def save(self):
-        data = {"last_sync": self.last_dt, "records": self.records}
-        pickle_dump(self.filepath, data)
+        raw = {
+            k: v.model_dump() if isinstance(v, BaseModel) else v for k, v in self.records.items()
+        }
+        pickle_dump(self.filepath, {"last_sync": self.last_dt, "records": raw})
 
     def upsert(self, records: list[T]):
         for record in records:
-            record_id = record[self.id_key]
-            self.records[record_id] = record
+            try:
+                key = str(
+                    getattr(record, self.id_key)
+                    if isinstance(record, BaseModel)
+                    else cast(dict, record)[self.id_key]
+                )
+            except (KeyError, AttributeError):
+                logger.error(f"Record is missing id_key '{self.id_key}': {record}")
+                raise
+            self.records[key] = record
 
     def count(self) -> int:
         return len(self.records)

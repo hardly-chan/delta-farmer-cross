@@ -62,7 +62,7 @@ uv run -m apps.<app> close          # Close all open positions
 uv run -m apps.<app> info           # View account balances & points
 uv run -m apps.<app> stats          # View trading statistics (cached 1h)
 uv run -m apps.<app> stats last     # Show only previous period
-uv run -m apps.<app> stats --sync   # Force refresh cached data
+uv run -m apps.<app> stats --force  # Force refresh cached data
 uv run -m apps.<app> clean          # Delete cached data
 
 # Config management
