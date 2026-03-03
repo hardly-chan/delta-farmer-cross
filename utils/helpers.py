@@ -268,3 +268,35 @@ def parse_signature_type(value: str) -> list[dict[str, str]]:
         ftype, fname = part.rsplit(" ", 1)
         out.append({"name": fname, "type": ftype})
     return out
+
+
+# MARK: Async utils
+
+
+async def gather_cancel(tasks: list[asyncio.Task], timeout: float) -> None:
+    """Gather tasks, canceling any that exceed the timeout."""
+    try:
+        await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=timeout)
+    except asyncio.TimeoutError:
+        logger.warning(f"Timeout ({timeout:.0f}s), canceling stuck tasks")
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def raise_if_cancelled(stop_event: asyncio.Event | None):
+    if stop_event and stop_event.is_set():
+        raise asyncio.CancelledError
+
+
+async def interruptible_sleep(sec: float, stop_event: asyncio.Event | None = None) -> None:
+    """Sleep for sec seconds, raising CancelledError early if stop_event fires."""
+    if stop_event is None:
+        await asyncio.sleep(sec)
+        return
+    try:
+        await asyncio.wait_for(stop_event.wait(), timeout=sec)
+        raise asyncio.CancelledError
+    except asyncio.TimeoutError:
+        pass  # completed normally

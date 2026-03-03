@@ -8,6 +8,7 @@ Automated delta-neutral trading for crypto points farming. Execute hedged strate
 
 - 🎯 Delta-neutral trading strategies
 - 🔄 Multi-account position management
+- 👥 Optional grouped trading mode
 - 📊 Real-time P&L tracking
 - 🔐 Encrypted private key storage
 - 🎲 Configurable trade sizes and timing
@@ -85,6 +86,23 @@ uv run -m apps.pacifica -c configs/pacifica-alt.toml trade
 uv run -m apps.omni -c configs/omni-set1.toml trade
 uv run -m apps.omni -c configs/omni-set2.toml trade
 ```
+
+### Grouped Trading Mode
+
+You can run multiple independent strategy groups in one process:
+
+```toml
+group_size = 2
+regroup_interval = "12h"
+```
+
+Rules:
+
+- `group_size` must be between `2` and `5`
+- if `group_size` is not set, single-group mode supports at most `5` enabled accounts
+- if `group_size` is set, enabled account count must be divisible by `group_size`
+- when `group_size` is set, `first_as_main` is ignored
+- `regroup_interval` is applied only when `group_size` is set
 
 ### Password Management
 

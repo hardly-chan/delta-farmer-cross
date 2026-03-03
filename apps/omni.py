@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field, SecretStr, field_validator
 
 from clients.omni import OmniClient, OmniPoint
 from strategy.models import StrategyConfig, load_config
-from strategy.strategy import DeltaStrategy
+from strategy.strategy import run_groups
 from strategy.trading import close_all
 from utils.cli import create_cli, run_app
 from utils.crypto import decrypt_value, is_encrypted
@@ -66,6 +66,7 @@ async def sync_points(acc: OmniClient, ttl: int) -> list[OmniPoint]:
 
 async def print_info(accs: list[OmniClient]):
     tbl = AutoTable(
+        Column("", justify="left"),
         Column("Account", justify="left"),
         Column("Address", justify="left"),
         Column("Volume", "{:,.0f}", total=sum),
@@ -75,9 +76,16 @@ async def print_info(accs: list[OmniClient]):
         Column("Balance", "{:,.2f}", total=sum),
     )
 
-    profiles = await asyncio.gather(*[acc.profile() for acc in accs])
-    for acc, p in zip(accs, profiles):
-        tbl.add_row(acc.name, p.addr, p.volume, -p.pnl, p.points, p.balance)
+    async def row(acc: OmniClient):
+        await acc.warmup()
+        p = await acc.profile() if await acc.registered() else None
+        a = short_addr(acc.address)
+        if not p:
+            return ("✗", acc.name, a, 0, 0, 0, 0)
+        return ("✓", acc.name, a, p.volume, -p.pnl, p.points, p.balance)
+
+    for r in await gather_accs(accs, row):
+        tbl.add_row(*r)
 
     tbl.print()
 
@@ -166,7 +174,7 @@ async def main():
         case "close":
             await close_all(act_accs)
         case "trade":
-            await DeltaStrategy(cfg, act_accs).run()
+            await run_groups(cfg, act_accs)
 
 
 if __name__ == "__main__":

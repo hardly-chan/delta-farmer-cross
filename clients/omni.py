@@ -1,6 +1,5 @@
 # delta-farmer | https://github.com/vladkens/delta-farmer
 # Copyright (c) vladkens | MIT License | If it compiles, ship it
-import asyncio
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, Type
@@ -78,12 +77,12 @@ class OmniClient:
             cookies_file=f".cache/omni_{utils.short_addr(self.address)}_http.pkl",
         )
 
-    @retry(max_attempts=9, delay=2.0)
+    @retry(max_attempts=9, delay=2.0)  # bypass cloudflare
     async def warmup(self) -> None:
         rep = await self.http.request("GET", "https://omni.variational.io/")
         assert rep.ok, f"Warmup failed: {rep.status_code} {rep.text[:200]}"
 
-    @retry(max_attempts=3, delay=1.0)
+    @retry(max_attempts=9, delay=2.0)  # bypass cloudflare
     async def registered(self) -> bool:
         rep = await self.http.request("GET", f"/auth/company/{self.address}")
         rep.raise_for_status()
@@ -304,7 +303,7 @@ class OmniClient:
 
     async def points_total(self) -> PointsInfo:
         res = await self._call("GET", "/points/summary")
-        return PointsInfo(**res)
+        return PointsInfo(**res) if res else PointsInfo(total_points=Decimal(0))
 
     async def total_volume(self) -> Decimal:
         res = await self._call("GET", "/referrals/summary")
@@ -321,9 +320,12 @@ class OmniClient:
         return Decimal(data.get("pnl", 0))
 
     async def profile(self) -> ProfileInfo:
-        bal, pts, vol, pnl = await asyncio.gather(
-            self.balance(), self.points_total(), self.total_volume(), self.pnl()
-        )
+        # Omni have Cloudflare protection, so do it one by one to avoid triggering anti-bot
+        bal = await self.balance()
+        pts = await self.points_total()
+        vol = await self.total_volume()
+        pnl = await self.pnl()
+
         return ProfileInfo(
             addr=utils.short_addr(self.address),
             balance=bal,

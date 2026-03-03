@@ -79,6 +79,8 @@ class StrategyConfig(BaseModel):
     limit_wait: DurationSec = DurationSec("90s")
     limit_market_fallback: bool = True
     first_as_main: bool = False
+    group_size: int | None = Field(None, ge=2, le=5)
+    regroup_interval: DurationSec | None = None
 
 
 def load_config(config_cls: Type[ConfigT], filepath: str) -> ConfigT:

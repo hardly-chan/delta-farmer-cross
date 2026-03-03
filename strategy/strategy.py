@@ -5,6 +5,7 @@ import random
 import time
 from dataclasses import dataclass
 from decimal import Decimal
+from itertools import batched
 from typing import Sequence
 
 from strategy.models import StrategyConfig
@@ -38,50 +39,52 @@ class DeltaStrategy:
     Opens opposite positions on multiple accounts.
     """
 
-    def __init__(self, cfg: StrategyConfig, accounts: Sequence[TradingClient]):
+    def __init__(
+        self,
+        cfg: StrategyConfig,
+        accounts: Sequence[TradingClient],
+        stop_event: asyncio.Event | None = None,
+    ):
         self.cfg = cfg
         self.accounts = list(accounts)
+        self.stop_event = stop_event
         self.initial_bal = Decimal(0)
 
     # MARK: Core trading flow
 
     async def _loop(self):
-        # todo: not sure do we need to close all markets or only markets from config?
-        await self.close_all()
+        await self.close_all()  # clean up leftovers from a previous run
 
+        # cycles until an exception; run() catches, waits, and retries
         while True:
             try:
-                print("-" * 60)
+                # print sep for each trade cycle in single-group mode
+                print("-" * 60) if not self.cfg.group_size else None
+
                 await self.trade_cycle()
+                utils.raise_if_cancelled(self.stop_event)
 
                 wait_sec = self.cfg.trade_cooldown.sample()
                 logger.info(utils.wait_msg(wait_sec))
-                await asyncio.sleep(wait_sec)
-            except FatalError:
-                raise
+                await utils.interruptible_sleep(wait_sec, self.stop_event)
             except Exception as e:
                 logger.warning(f"Trade cycle failed {type(e)}: {e}")
-                await self.close_all()
-                break
+                await self.close_all()  # best-effort cleanup, may also fail
+                raise e
 
     async def run(self):
-        """Main entry point."""
-        if not (2 <= len(self.accounts) <= 5):
-            raise FatalError(
-                f"Accounts for trading must be between 2 and 5, got {len(self.accounts)}"
-            )
+        balance_inited = False
 
-        # Warmup all accounts to avoid captcha & check registration before starting trading loop
-        await self.warmup()
-        bals = await self.get_balances()
-        self.initial_bal = sum(bal for _, bal in bals)
-
-        # In case network or exchange hiccups, don't just fail but wait and retry
-        while True:
+        while True:  # restart _loop() after transient failures; exit only on cancel/fatal
             try:
+                if not balance_inited:
+                    bals = await self.get_balances()
+                    self.initial_bal = sum(bal for _, bal in bals)
+                    balance_inited = True
+
                 await self._loop()
-            except FatalError:
-                raise
+            except asyncio.CancelledError:
+                return  # graceful shutdown
             except Exception as e:
                 wait_sec = 60 * 3
                 logger.error(f"Trade failed with {type(e)}: {e} - {utils.wait_msg(wait_sec)}")
@@ -203,7 +206,12 @@ class DeltaStrategy:
         until = time.time() + duration
 
         while time.time() < until:
-            await asyncio.sleep(min(self.cfg.trade_heartbeat, until - time.time()))
+            if self.stop_event and self.stop_event.is_set():
+                logger.info("Stop event received, exiting early")
+                return False  # stop requested
+
+            sleep_for = min(self.cfg.trade_heartbeat, until - time.time())
+            await asyncio.sleep(max(0, sleep_for))
 
             try:
                 if not await self.check_positions(actions, market):
@@ -240,17 +248,6 @@ class DeltaStrategy:
         return True
 
     # MARK: Helpers
-
-    async def warmup(self):
-        rs = await asyncio.gather(*[a.warmup() for a in self.accounts], return_exceptions=True)
-        rs = [a.name for a, r in zip(self.accounts, rs) if isinstance(r, Exception)]
-        if rs:
-            raise FatalError(f"Warmup failed: {', '.join(rs)}")
-
-        rs = await asyncio.gather(*[a.registered() for a in self.accounts], return_exceptions=True)
-        rs = [a.name for a, r in zip(self.accounts, rs) if isinstance(r, Exception) or r is False]
-        if rs:
-            raise FatalError(f"Not registered: {', '.join(rs)}")
 
     async def get_balances(self) -> list[tuple[str, float]]:
         """Get balances for all accounts."""
@@ -295,3 +292,92 @@ class DeltaStrategy:
         diff_str = " | ".join([f"{name} {diff:+.2f}" for name, diff in diff_str])
         total_pnl = sum(x[1] for x in now) - float(self.initial_bal)
         logger.info(f"Δ {diff_sum:+.2f} ~ {diff_str}; Total P/L: {total_pnl:+.2f}")
+
+
+# MARK: Groups
+
+
+async def _warmup_all(accs: Sequence[TradingClient]) -> None:
+    rs = await asyncio.gather(*[a.warmup() for a in accs], return_exceptions=True)
+    failed = [a.name for a, r in zip(accs, rs) if isinstance(r, Exception)]
+    if failed:
+        raise FatalError(f"Warmup failed: {', '.join(failed)}")
+
+    rs = await asyncio.gather(*[a.registered() for a in accs], return_exceptions=True)
+    failed = [a.name for a, r in zip(accs, rs) if isinstance(r, Exception) or r is False]
+    if failed:
+        raise FatalError(f"Not registered: {', '.join(failed)}")
+
+
+async def _run_group(
+    cfg: StrategyConfig,
+    name: str,
+    accs: Sequence[TradingClient],
+    stop_event: asyncio.Event,
+    stagger: float = 0,
+) -> None:
+    strategy = DeltaStrategy(cfg, accs, stop_event=stop_event)
+    with logger.contextualize(group=name):
+        await asyncio.sleep(stagger) if stagger else None
+        logger.info(f"Starting group with accounts: {', '.join(a.name for a in accs)}")
+        await strategy.run()  # all exceptions should be handled inside run()
+
+
+def _check_cfg(cfg: StrategyConfig, accs: Sequence[TradingClient]):
+    n = len(accs)
+
+    if n < 2:
+        raise FatalError(f"At least 2 accounts are required for trading, got {n}")
+
+    if cfg.group_size is None and n > 5:
+        raise FatalError("Single-group mode supports up to 5 enabled accounts")
+
+    if cfg.group_size is not None and n % cfg.group_size != 0:
+        raise FatalError(f"{n} enabled accounts is not divisible by group_size={cfg.group_size}")
+
+    if cfg.group_size is not None and cfg.first_as_main:
+        cfg.first_as_main = False
+        logger.warning("group_size is set, ignoring first_as_main=true")
+
+    return cfg, accs
+
+
+async def _balance_sorted(accs: Sequence[TradingClient]) -> list[TradingClient]:
+    rs = await asyncio.gather(*[a.balance() for a in accs])
+    pairs = [(acc, bal) for acc, bal in zip(accs, rs)]
+    pairs.sort(key=lambda x: x[1])
+    return [acc for acc, _ in pairs]
+
+
+async def run_groups(cfg: StrategyConfig, accs: Sequence[TradingClient]) -> None:
+    cfg, accs = _check_cfg(cfg, accs)
+    await _warmup_all(accs)
+
+    if not cfg.group_size:  # Single group mode, no regrouping
+        return await DeltaStrategy(cfg, accs).run()
+
+    while True:
+        print("-" * 60)
+        # sort by balance only if regrouping requested - otherwise keep config order
+        accs = await _balance_sorted(accs) if cfg.regroup_interval else accs
+        grps = [list(g) for g in batched(accs, cfg.group_size)]
+        logger.info(f"Running trading with {len(grps)} groups ({len(accs)} accounts)")
+
+        tasks: list[asyncio.Task] = []
+        stop_event = asyncio.Event()
+
+        for i, grp_accounts in enumerate(grps):
+            stagger = i * random.uniform(10, 30)
+            name = f"{i + 1:02d}"
+            coro = _run_group(cfg, name, grp_accounts, stop_event, stagger)
+            tasks.append(asyncio.create_task(coro, name=f"delta-{name}"))
+
+        if cfg.regroup_interval is None:  # if not regrouping, just run until manually stopped
+            await asyncio.gather(*tasks, return_exceptions=True)
+            return
+
+        await asyncio.sleep(cfg.regroup_interval)
+        stop_event.set()
+
+        max_wait = int(cfg.limit_wait) + int(cfg.trade_duration.max) + 60
+        await utils.gather_cancel(tasks, max_wait)

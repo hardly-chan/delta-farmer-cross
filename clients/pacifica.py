@@ -152,7 +152,13 @@ class PacificaClient:
         pass
 
     async def registered(self) -> bool:
-        return True  # todo:
+        try:
+            await self._call("GET", f"/account?account={str(self.keypair.pubkey())}")
+            return True
+        except ApiError as e:
+            if "account not found" in str(e).lower():
+                return False
+            raise
 
     @ttl_cache(60)
     async def _info(self):
