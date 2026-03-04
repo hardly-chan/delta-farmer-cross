@@ -121,10 +121,13 @@ async def print_stats(accs: list[EtherealClient], period="week", filter_period="
     all_periods = sorted(gpos.keys() | gpts.keys())
     periods_to_show = parse_filter(filter_period, all_periods)
 
-    tvol: dict[str, Decimal] = defaultdict(Decimal)
+    all_names = [x.name for x in accs]
+    tvol = defaultdict(Decimal)
+
     for p in periods_to_show:
         tbl.subgroup(f"{p}")
         acc_names = sorted(gpos[p].keys() | gpts[p].keys())
+        acc_names = [x for x in all_names if x in acc_names]  # keep order of accounts
         for acc_name in acc_names:
             positions = gpos[p][acc_name]
             pts = gpts.get(p, {}).get(acc_name, Decimal(0))

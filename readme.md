@@ -15,12 +15,14 @@ Automated delta-neutral trading for crypto points farming. Execute hedged strate
 
 ## Supported Protocols
 
-| Protocol                                | Tech   | Status      | Description                   |
-| --------------------------------------- | ------ | ----------- | ----------------------------- |
-| [Pacifica](https://pacifica.fi)         | Solana | Ready       | Perpetuals DEX                |
-| [Omni](https://omni.variational.io)     | EVM    | Ready       | Perpetuals DEX by Variational |
-| [Ethereal](https://app.ethereal.trade/) | EVM    | Ready       | Perpetuals DEX                |
-| [Nado](https://app.nado.xyz/)           | EVM    | Coming Soon | —                             |
+| Protocol                                   | Tech     | Status      |
+| ------------------------------------------ | -------- | ----------- |
+| [Pacifica](https://pacifica.fi)            | Solana   | Ready       |
+| [Omni](https://omni.variational.io)        | EVM      | Ready       |
+| [Ethereal](https://app.ethereal.trade/)    | EVM      | Ready       |
+| [Nado](https://app.nado.xyz/)              | EVM      | Ready       |
+| [HyENA](https://app.hyena.trade/)          | EVM      | In Progress |
+| [Extended](https://app.extended.exchange/) | Starknet | In Progress |
 
 ## Installation
 
@@ -42,7 +44,7 @@ uv sync
 ## Quick Start
 
 ```bash
-# Replace <app> with: pacifica, omni, ethereal
+# Replace <app> with: pacifica, omni, ethereal, nado
 cp configs.example/<app>.toml configs/<app>.toml
 # Edit configs/<app>.toml with your private keys
 
@@ -55,7 +57,7 @@ uv run -m apps.<app> trade           # Start trading
 All protocols share common commands:
 
 ```bash
-# Replace <app> with: pacifica, omni, ethereal
+# Replace <app> with: pacifica, omni, ethereal, nado
 
 # Trading
 uv run -m apps.<app> trade          # Start automated trading

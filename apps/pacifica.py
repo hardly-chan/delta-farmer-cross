@@ -126,10 +126,13 @@ async def print_stats(accs: list[PacificaClient], period="week", filter_period="
         Column("Total Vol", "{:,.0f}", total=sum, grand_total=False),
     )
 
+    all_names = [x.name for x in accs]
     tvol = defaultdict(Decimal)
+
     for pk in periods_to_show:
         tbl.subgroup(f"{pk}")
         acc_names = sorted(gtrades[pk].keys() | gpoints[pk].keys())
+        acc_names = [x for x in all_names if x in acc_names]  # keep order of accounts
         for acc_name in acc_names:
             trades = gtrades[pk].get(acc_name, [])
             points = gpoints[pk].get(acc_name, Decimal(0))

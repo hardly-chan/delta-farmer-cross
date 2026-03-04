@@ -20,7 +20,9 @@ from utils.table import AutoTable, Column
 
 # https://docs.variational.io/omni/rewards/points
 # https://omni.variational.io/points (UI counts from -1 week)
-GENESIS = datetime(2025, 12, 17 - 7, tzinfo=timezone.utc)
+GENESIS = datetime(2025, 12, 17 - 6, tzinfo=timezone.utc)
+
+to_week_name = partial(to_period_week, genesis=GENESIS)
 
 
 class AccountConfig(BaseModel):
@@ -96,7 +98,7 @@ async def print_stats(accs: list[OmniClient], period="week", filter_period="all"
     gvol = defaultdict(lambda: defaultdict(Decimal))
     gpts = defaultdict(lambda: defaultdict(Decimal))
 
-    period_fn = to_period_day if period == "day" else partial(to_period_week, genesis=GENESIS)
+    period_fn = to_period_day if period == "day" else to_week_name
     ttl = 0 if force else 3600
 
     all_transfers, all_trades, all_points = await asyncio.gather(
@@ -137,10 +139,13 @@ async def print_stats(accs: list[OmniClient], period="week", filter_period="all"
     all_periods = sorted(gpnl.keys() | gvol.keys() | gpts.keys())
     periods_to_show = parse_filter(filter_period, all_periods)
 
+    all_names = [x.name for x in accs]
     tvol = defaultdict(Decimal)
+
     for p in periods_to_show:
         tbl.subgroup(f"{p}")
         acc_names = sorted(gpnl[p].keys() | gvol[p].keys() | gpts[p].keys())
+        acc_names = [x for x in all_names if x in acc_names]  # keep order of accounts
         for acc_name in acc_names:
             cnt = gcnt[p][acc_name] or 0
             pnl = gpnl[p][acc_name] or 0

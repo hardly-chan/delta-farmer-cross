@@ -4,6 +4,8 @@ import asyncio
 import functools
 import os
 import sys
+import uuid
+from datetime import datetime, timezone
 
 import curl_cffi as curl
 import machineid
@@ -14,6 +16,7 @@ APP_ID = "delta-farmer"
 
 _queue: list[dict] = []
 _context: dict = {}
+_session_id = str(uuid.uuid4())
 
 
 @functools.cache
@@ -46,7 +49,18 @@ async def _flush_loop(interval: int) -> None:
         raise
 
 
-def init(exchange: str, command: str, version: str = "", flush_interval: int = 300) -> None:
+async def _heartbeat_loop(interval: int) -> None:
+    try:
+        while True:
+            await asyncio.sleep(interval)
+            track("heartbeat")
+    except asyncio.CancelledError:
+        raise
+
+
+def init(
+    exchange: str, command: str, version: str = "", flush_interval=120, heartbeat_interval=3600
+) -> None:
     pld = {
         "exchange": exchange,
         "command": command,
@@ -54,12 +68,14 @@ def init(exchange: str, command: str, version: str = "", flush_interval: int = 3
         "platform": sys.platform,
         "version": version.strip(),
         "$lib": APP_ID,
+        "$session_id": _session_id,
     }
     _context.update(pld)
 
     try:
         loop = asyncio.get_running_loop()
         loop.create_task(_flush_loop(flush_interval), name="telemetry-flush")
+        loop.create_task(_heartbeat_loop(heartbeat_interval), name="telemetry-heartbeat")
     except RuntimeError:
         pass  # no event loop running
 
@@ -68,5 +84,6 @@ def track(event: str, props: dict | None = None) -> None:
     if os.getenv("DF_TELEMETRY") == "0":
         return
 
+    ts = datetime.now(timezone.utc).isoformat()
     props = {**_context, **(props or {})}
-    _queue.append({"event": event, "distinct_id": _anon_id(), "properties": props})
+    _queue.append({"event": event, "distinct_id": _anon_id(), "timestamp": ts, "properties": props})
