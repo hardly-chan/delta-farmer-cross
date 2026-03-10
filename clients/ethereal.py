@@ -392,9 +392,23 @@ class EtherealClient:
 
     # MARK: Stats
 
+    async def _eip712_auth_headers(self, intent: int) -> dict[str, str]:
+        now_sec = int(time.time())
+        msg = {"sender": self.address, "intent": intent, "signedAt": now_sec}
+        sig = await self._sign("EIP712Auth", msg)
+        return {
+            "x-ethereal-auth": "EIP712Auth",
+            "x-ethereal-sender": self.address,
+            "x-ethereal-signature": sig,
+            "x-ethereal-intent": str(intent),
+            "x-ethereal-signedat": str(now_sec),
+        }
+
     async def points(self, season: int = 1, epoch: int = 2) -> list[EtherealPoint]:
-        params = {"address": self.address, "season": season, "epoch": epoch}
-        res = await self._call("GET", "/points", params=params)
+        sub = await self.subaccount()
+        hdr = await self._eip712_auth_headers(3)
+        pld = {"address": self.address, "season": season, "epoch": epoch, "subaccount": sub.name}
+        res = await self._call("GET", "/points", params=pld, headers=hdr)
         return [EtherealPoint.model_validate(x) for x in res.get("data", [])]
 
     async def _total_volume(self) -> Decimal:

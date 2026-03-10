@@ -43,7 +43,7 @@ configs.example/ # example config files
 ```toml
 markets            = ["BTC", "ETH"]
 leverage           = 10
-trade_size_usd     = [100, 500]      # random range per trade
+trade_size_usd     = [100, 500]     # random range per trade
 trade_duration     = ["1m", "5m"]   # how long to hold
 trade_cooldown     = ["30s", "2m"]  # gap between trades
 trade_heartbeat    = "15s"          # PnL check interval

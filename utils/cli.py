@@ -85,4 +85,4 @@ def run_app(coro: Coroutine) -> None:
     except FatalError as e:
         logger.error(str(e))
     except KeyboardInterrupt:
-        pass
+        logger.info("Interrupted — closing all positions...")
