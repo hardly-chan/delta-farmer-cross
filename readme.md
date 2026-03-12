@@ -13,6 +13,7 @@ Automated delta-neutral trading for crypto points farming. Run classic two-sided
 - 📊 Real-time ROI safety checks
 - 🔐 Encrypted private key storage
 - 🎲 Configurable trade sizes and timing
+- 📨 Telegram push notifications
 
 ## Supported Protocols
 
@@ -130,6 +131,36 @@ Behavior:
 - `symbols_per_trade = 2..4` enables balanced basket mode
 - when `symbols_per_trade > 1`, set exactly that many entries in `symbols`
 - safety exits now use both per-position ROI and combined basket ROI
+
+### Telegram Notifications
+
+Add a `[telegram]` section to your config to receive trade notifications:
+
+```toml
+[telegram]
+token = "your-bot-token"   # from @BotFather — run `config encrypt` to encrypt
+chat_id = "your-chat-id"   # personal or group chat ID
+
+# Channels to notify (remove any to silence them):
+notify = ["start", "stop", "errors", "reports"]
+
+report_interval = "1h"  # how often to send periodic digest
+```
+
+To get credentials:
+1. Create a bot via [@BotFather](https://t.me/BotFather) and copy the token
+2. Get your chat ID from [@userinfobot](https://t.me/userinfobot)
+3. Encrypt the token: `uv run -m apps.<app> config encrypt`
+4. Test the connection: `uv run -m apps.<app> tgtest`
+
+Notification channels:
+
+| Channel   | When                                          |
+| --------- | --------------------------------------------- |
+| `start`   | Trade cycle opens (symbol, size, accounts)    |
+| `stop`    | Trade cycle closes (PnL, duration)            |
+| `errors`  | Cycle failures and crashes                    |
+| `reports` | Periodic digest (trades, volume, burn, $/100k) |
 
 ### Password Management
 

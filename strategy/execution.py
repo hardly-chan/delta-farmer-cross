@@ -210,6 +210,8 @@ async def hold_positions(
     logger.info(utils.wait_msg(duration))
 
     until = time.time() + duration
+    last_error_key: str | None = None
+    last_error_count = 0
     while time.time() < until:
         if stop_event and stop_event.is_set():
             logger.info("Stop event received, exiting early")
@@ -225,7 +227,17 @@ async def hold_positions(
                 Decimal(str(cfg.combined_roi_limit)),
             ):
                 return False
+            last_error_key = None
+            last_error_count = 0
         except Exception as e:
-            logger.warning(f"Position safety check failed {type(e)}: {e}, continuing wait...")
+            error_key = f"{type(e).__name__}: {e}"
+            if error_key == last_error_key:
+                last_error_count += 1
+            else:
+                last_error_key = error_key
+                last_error_count = 1
+
+            if last_error_count == 2:
+                logger.warning(f"Position safety check failed {type(e)}: {e}, continuing wait...")
 
     return True

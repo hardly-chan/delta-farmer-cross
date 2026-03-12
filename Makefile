@@ -1,4 +1,5 @@
-.PHONY: lint update clean deploy
+.PHONY: lint update clean deploy stats stats-was stats-now
+p ?= all
 
 lint:
 	uv run ruff format .
@@ -14,6 +15,18 @@ update:
 clean:
 	rm -rf .ruff_cache .venv uv.lock .python-version
 	find . -type f -name "*.pyc" -delete
+
+stats:
+	@echo "\n── pacifica ──" && uv run -m apps.pacifica stats $(p)
+	@echo "\n── ethereal ──" && uv run -m apps.ethereal stats $(p)
+	@echo "\n── omni ──" && uv run -m apps.omni stats $(p)
+	@echo "\n── nado ──" && uv run -m apps.nado stats $(p)
+
+stats-was:
+	@$(MAKE) -s stats p=last
+
+stats-now:
+	@$(MAKE) -s stats p=this
 
 # --- Deploy ---
 

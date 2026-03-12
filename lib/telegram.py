@@ -98,27 +98,31 @@ async def on_trade_start(symbols: list[str], size_usd: float, accounts: list[str
         return None
     sym_str = " / ".join(symbols)
     acc_str = ", ".join(accounts)
-    return await send(f"🟢 *{_state.exchange}* — {sym_str} · ${size_usd:,.0f} · {acc_str}")
+    msg = f"🟢 Trade started on *{_state.exchange}* — {sym_str} · ${size_usd:,.0f} · {acc_str}"
+    return await send(msg)
 
 
 async def on_trade_stop(pnl: float, duration: float, reply_to: int | None = None) -> None:
     if not enabled() or "stop" not in _state.cfg.notify:
         return
-    await send(f"⚪ done — {_fmt_pnl(pnl)} · {_fmt_dur(duration)}", reply_to=reply_to)
+
+    await send(f"⚪ Trade done — {_fmt_pnl(pnl)} · {_fmt_dur(duration)}", reply_to=reply_to)
 
 
 async def on_error(error: str, attempt: int, max_attempts: int) -> None:
     if not enabled() or "errors" not in _state.cfg.notify:
         return
+
     ts = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
-    await send(
-        f"⚠️ *{_state.exchange}* — cycle failed ({attempt}/{max_attempts})\n`{error[:200]}`\n_{ts}_"
-    )
+    msg = f"({attempt}/{max_attempts})\n`{error[:200]}`\n_{ts}_"
+    msg = f"⚠️ *{_state.exchange}* — cycle failed {msg}"
+    await send(msg)
 
 
 async def on_crash(error: str) -> None:
     if not enabled() or "errors" not in _state.cfg.notify:
         return
+
     ts = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
     await send(f"🔴 *{_state.exchange}* crashed\n`{error[:200]}`\n_{ts}_")
 
