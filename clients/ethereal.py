@@ -267,7 +267,6 @@ class EtherealClient:
         nonce = str(time.time_ns())
         now_sec = int(time.time())
 
-
         data: dict[str, Any] = {
             "sender": self.address,
             "subaccount": sub.name,

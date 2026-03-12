@@ -157,7 +157,9 @@ class DeltaStrategy:
         if failed:
             raise RuntimeError(f"Failed to open {symbol} on: {', '.join(failed)}")
 
-    async def report_pnl(self, was: list[tuple[str, float]]) -> tuple[float, list[tuple[str, float]]]:
+    async def report_pnl(
+        self, was: list[tuple[str, float]]
+    ) -> tuple[float, list[tuple[str, float]]]:
         now = await self.get_balances()
         diff_sum = sum(x[1] for x in now) - sum(x[1] for x in was)
         diff_str = [(x[0], x[1] - y[1]) for x, y in zip(now, was)]
