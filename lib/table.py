@@ -1,7 +1,9 @@
 # delta-farmer | https://github.com/vladkens/delta-farmer
 # Copyright (c) vladkens | MIT License | May contain traces of genius
 import decimal
+from collections import defaultdict
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Callable, cast
 
 from rich import print as console_print
@@ -10,6 +12,8 @@ from rich.console import JustifyMethod
 from rich.table import Table
 
 from .logger import logger
+
+_TBD = object()  # sentinel: not enough data to compute
 
 
 @dataclass
@@ -20,6 +24,7 @@ class Column:
 
     total: Callable | None = None
     compute: Callable | None = None
+    guard: Callable | None = None  # if returns False, shows "tbd" instead of computing
     grand_total: bool = True
 
 
@@ -35,6 +40,8 @@ class RowProxy:
 def _compute(col: Column, proxy: RowProxy):
     assert col.compute is not None, "No compute function defined for column"
 
+    if col.guard and not col.guard(proxy):
+        return _TBD
     try:
         return col.compute(proxy)
     except (ZeroDivisionError, decimal.InvalidOperation):
@@ -77,7 +84,7 @@ class AutoTable:
         self._sub_index = len(self.rows)
 
     def _compute_totals_for_rows(self, rows):
-        totals = [None] * len(self.columns)
+        totals: list = [None] * len(self.columns)
         proxy = RowProxy(totals, self.name_to_index)
 
         # normal totals
@@ -99,7 +106,12 @@ class AutoTable:
 
             for i, col in enumerate(self.columns):
                 val = _compute(col, proxy) if col.compute else row[i]
-                rendered.append(col.fmt.format(val) if val is not None else "n/a")
+                if val is _TBD:
+                    rendered.append("tbd")
+                elif val is not None:
+                    rendered.append(col.fmt.format(val))
+                else:
+                    rendered.append("n/a")
 
             if gtitle:
                 tbl.add_row(gtitle if idx == 0 else "", *rendered)
@@ -136,7 +148,11 @@ class AutoTable:
 
             self._render_rows(tbl, subrows, title)
             footer = [
-                col.fmt.format(subtotals[i]) if subtotals[i] is not None else ""
+                "tbd"
+                if subtotals[i] is _TBD
+                else col.fmt.format(subtotals[i])
+                if subtotals[i] is not None
+                else ""
                 for i, col in enumerate(self.columns)
             ]
 
@@ -149,6 +165,79 @@ class AutoTable:
 
     def print(self):
         console_print(self.render())
+
+
+# MARK: Stats rendering
+
+
+@dataclass
+class PeriodRow:
+    account: str
+    trades: int
+    volume: Decimal
+    burn: Decimal
+    points: Decimal
+    fees: Decimal
+
+
+def render_stats(
+    periods: dict[str, list[PeriodRow]],
+    periods_to_show: list[str],
+    *,
+    fees: bool = True,
+    points_fmt: str = "{:,.2f}",
+    pprice_fmt: str = "{:,.2f}",
+    min_vol: int = 1_000,
+) -> None:
+    cols: list[Column] = [
+        Column("Account", justify="left"),
+        Column("Trades", "{:,}", total=sum),
+        Column("Volume", "{:,.0f}", total=sum),
+        Column("Burn", "{:,.2f}", total=sum),
+        Column("Points", points_fmt, total=sum),
+        Column("P/Price", pprice_fmt, compute=lambda r: r["Burn"] / r["Points"]),
+        Column(
+            "$/100k",
+            "${:,.2f}",
+            compute=lambda r: r["Burn"] / r["Volume"] * Decimal(1e5),
+            guard=lambda r: r["Volume"] >= min_vol,
+        ),
+    ]
+    if fees:
+        cols += [
+            Column("Fees", "{:,.2f}", total=sum),
+            Column(
+                "Fee, %",
+                "{:.3%}",
+                compute=lambda r: r["Fees"] / r["Volume"],
+                guard=lambda r: r["Volume"] >= min_vol,
+            ),
+        ]
+    cols.append(Column("Total Vol", "{:,.0f}", total=sum, grand_total=False))
+
+    tbl = AutoTable(*cols)
+    tvol: defaultdict[str, Decimal] = defaultdict(Decimal)
+
+    for pk in periods_to_show:
+        tbl.subgroup(pk)
+        for row in periods.get(pk, []):
+            tvol[row.account] += row.volume
+            if fees:
+                tbl.add_row(
+                    row.account,
+                    row.trades,
+                    row.volume,
+                    row.burn,
+                    row.points,
+                    row.fees,
+                    tvol[row.account],
+                )
+            else:
+                tbl.add_row(
+                    row.account, row.trades, row.volume, row.burn, row.points, tvol[row.account]
+                )
+
+    tbl.print()
 
 
 if __name__ == "__main__":

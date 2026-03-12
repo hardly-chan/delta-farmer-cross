@@ -10,7 +10,7 @@ from clients.pacifica import PacificaClient, PacificaPoint, PacificaTrade
 from lib.cli import create_cli, run_app
 from lib.models import AccountConfig
 from lib.store import DataStore
-from lib.table import AutoTable, Column
+from lib.table import AutoTable, Column, PeriodRow, render_stats
 from lib.utils import gather_accs, parse_filter, short_addr, to_period_day, to_period_week
 from strategy.delta import run_groups
 from strategy.models import StrategyConfig, load_config
@@ -98,38 +98,22 @@ async def print_stats(accs: list[PacificaClient], period="week", filter_period="
 
     all_periods = sorted(gtrades.keys() | gpoints.keys())
     periods_to_show = parse_filter(filter_period, all_periods)
-
-    tbl = AutoTable(
-        Column("Account", justify="left"),
-        Column("Trades", "{:,}", total=sum),
-        Column("Volume", "{:,.0f}", total=sum),
-        Column("Burn", "{:,.2f}", total=sum),
-        Column("Points", "{:,.1f}", total=sum),
-        Column("P/Price", "{:,.3f}", compute=lambda r: r["Burn"] / r["Points"]),
-        Column("$/100k", "${:,.2f}", compute=lambda r: r["Burn"] / r["Volume"] * Decimal(1e5)),
-        Column("Fees", "{:,.2f}", total=sum),
-        Column("Fee, %", "{:.3%}", compute=lambda r: r["Fees"] / r["Volume"]),
-        Column("Total Vol", "{:,.0f}", total=sum, grand_total=False),
-    )
-
     all_names = [x.name for x in accs]
-    tvol = defaultdict(Decimal)
 
-    for pk in periods_to_show:
-        tbl.subgroup(f"{pk}")
-        acc_names = sorted(gtrades[pk].keys() | gpoints[pk].keys())
-        acc_names = [x for x in all_names if x in acc_names]  # keep order of accounts
+    periods_data: dict[str, list[PeriodRow]] = {}
+    for pk in all_periods:
+        acc_names = [n for n in all_names if n in (gtrades[pk].keys() | gpoints[pk].keys())]
+        rows = []
         for acc_name in acc_names:
             trades = gtrades[pk].get(acc_name, [])
             points = gpoints[pk].get(acc_name, Decimal(0))
+            vol = sum((t.amount * t.price for t in trades), Decimal(0))
+            pnl = sum((t.pnl for t in trades), Decimal(0))
+            fee = sum((t.fee for t in trades), Decimal(0))
+            rows.append(PeriodRow(acc_name, len(trades), vol, -pnl, points, fee))
+        periods_data[pk] = rows
 
-            vol = sum(t.amount * t.price for t in trades)
-            pnl = sum(t.pnl for t in trades)
-            fee = sum(t.fee for t in trades)
-            tvol[acc_name] += vol
-            tbl.add_row(acc_name, len(trades), vol, -pnl, points, fee, tvol[acc_name])
-
-    tbl.print()
+    render_stats(periods_data, periods_to_show, points_fmt="{:,.1f}", pprice_fmt="{:,.3f}")
 
 
 # MARK: Main

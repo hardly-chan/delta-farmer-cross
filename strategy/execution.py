@@ -238,6 +238,7 @@ async def hold_positions(
                 last_error_count = 1
 
             if last_error_count == 2:
-                logger.warning(f"Position safety check failed {type(e)}: {e}, continuing wait...")
+                msg = f"Position safety check failed {type(e)}: {str(e)[:200]}, continuing wait..."
+                logger.warning(msg)
 
     return True

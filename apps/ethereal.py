@@ -10,7 +10,7 @@ from clients.ethereal import EtherealClient, EtherealPoint, EtherealPosition
 from lib.cli import create_cli, run_app
 from lib.models import AccountConfig
 from lib.store import DataStore
-from lib.table import AutoTable, Column
+from lib.table import AutoTable, Column, PeriodRow, render_stats
 from lib.utils import gather_accs, parse_filter, short_addr, to_period_day, to_period_week
 from strategy.delta import run_groups
 from strategy.models import StrategyConfig, load_config
@@ -91,43 +91,27 @@ async def print_stats(accs: list[EtherealClient], period="week", filter_period="
         for p in pts:
             gpts[period_fn(p.started_at)][acc.name] += p.total_points
 
-    tbl = AutoTable(
-        Column("Account", justify="left"),
-        Column("Trades", "{:,}", total=sum),
-        Column("Volume", "{:,.0f}", total=sum),
-        Column("Burn", "{:,.2f}", total=sum),
-        Column("Points", "{:,.0f}", total=sum),
-        Column("P/Price", "{:,.4f}", compute=lambda r: r["Burn"] / r["Points"]),
-        Column("$/100k", "${:,.2f}", compute=lambda r: r["Burn"] / r["Volume"] * Decimal(1e5)),
-        Column("Fees", "{:,.2f}", total=sum),
-        Column("Fee, %", "{:.3%}", compute=lambda r: r["Fees"] / r["Volume"]),
-        Column("Total Vol", "{:,.0f}", total=sum, grand_total=False),
-    )
-
     all_periods = sorted(gpos.keys() | gpts.keys())
     periods_to_show = parse_filter(filter_period, all_periods)
-
     all_names = [x.name for x in accs]
-    tvol = defaultdict(Decimal)
 
-    for p in periods_to_show:
-        tbl.subgroup(f"{p}")
-        acc_names = sorted(gpos[p].keys() | gpts[p].keys())
-        acc_names = [x for x in all_names if x in acc_names]  # keep order of accounts
+    periods_data: dict[str, list[PeriodRow]] = {}
+    for p in all_periods:
+        acc_names = [n for n in all_names if n in (gpos[p].keys() | gpts[p].keys())]
+        rows = []
         for acc_name in acc_names:
             positions = gpos[p][acc_name]
             pts = gpts.get(p, {}).get(acc_name, Decimal(0))
             if not positions and pts < 1:
                 continue
+            vol = sum((pos.total_inc + pos.total_dec for pos in positions), Decimal(0))
+            fee = sum((pos.fees_usd for pos in positions), Decimal(0))
+            fnd = sum((pos.funding_usd for pos in positions), Decimal(0))
+            pnl = sum((pos.realized_pnl for pos in positions), Decimal(0)) - fee - fnd
+            rows.append(PeriodRow(acc_name, len(positions), vol, -pnl, pts, fee))
+        periods_data[p] = rows
 
-            vol = sum(pos.total_inc + pos.total_dec for pos in positions)
-            fee = sum(pos.fees_usd for pos in positions)
-            fnd = sum(pos.funding_usd for pos in positions)
-            pnl = sum(pos.realized_pnl for pos in positions) - fee - fnd
-            tvol[acc_name] += vol
-            tbl.add_row(acc_name, len(positions), vol, -pnl, pts, fee, tvol[acc_name])
-
-    tbl.print()
+    render_stats(periods_data, periods_to_show, points_fmt="{:,.0f}", pprice_fmt="{:,.4f}")
 
 
 # MARK: Main

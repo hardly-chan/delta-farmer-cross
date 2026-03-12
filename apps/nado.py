@@ -2,7 +2,7 @@
 # Copyright (c) vladkens | MIT License | Refactoring is just future procrastination
 import asyncio
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import TypeVar
 
@@ -10,7 +10,7 @@ from clients.nado import NadoClient, NadoPoint, NadoTrade
 from lib.cli import create_cli, run_app
 from lib.models import AccountConfig
 from lib.store import DataStore
-from lib.table import AutoTable, Column
+from lib.table import AutoTable, Column, PeriodRow, render_stats
 from lib.utils import gather_accs, parse_filter, short_addr
 from strategy.delta import run_groups
 from strategy.models import StrategyConfig, load_config
@@ -19,17 +19,18 @@ from strategy.trading import close_all
 T = TypeVar("T")
 DD = defaultdict[str, defaultdict[str, T]]
 
-_OFF_START = datetime(2026, 1, 16, tzinfo=timezone.utc)  # Off Season start
-_SEASON_START = datetime(2026, 1, 31, tzinfo=timezone.utc)  # Week 1 start
+_EPOCH_PREFIX: dict[str, str] = {"Private Alpha": "ALP", "Off Season": "OFF"}
 
 
-def week_name(dt: datetime) -> str:
-    """Returns period label for a given UTC datetime: ALP / OFF / W01 / W02 / ..."""
-    if dt < _OFF_START:
-        return "ALP"
-    if dt < _SEASON_START:
-        return "OFF"
-    return f"W{((dt - _SEASON_START).days + 1) // 7 + 1:02d}"
+def _epoch_label(ep: NadoPoint) -> str:
+    start = ep.since.strftime("%b%d")
+    end = (ep.until - timedelta(seconds=1)).strftime("%b%d") if ep.until != ep.since else start
+    desc = ep.description
+    if desc.startswith("Week "):
+        n = int(desc.split()[1])
+        return f"W{n:02d} {start}-{end}"
+    prefix = _EPOCH_PREFIX.get(desc, desc[:3].upper())
+    return f"{prefix} {start}-{end}"
 
 
 class Config(StrategyConfig):
@@ -91,13 +92,22 @@ async def print_stats(accs: list[NadoClient], period="week", filter_period="all"
     gpoints: DD[Decimal] = defaultdict(lambda: defaultdict(Decimal))
     ttl = 0 if force else 3600
 
-    def period_fn(dt: datetime) -> str:
-        return dt.strftime("%Y-%m-%d") if period == "day" else week_name(dt)
-
     all_trades, all_points = await asyncio.gather(
         gather_accs(accs, lambda acc: sync_trades(acc, ttl)),
         gather_accs(accs, lambda acc: sync_points(acc, ttl)),
     )
+
+    # Epoch boundaries come from the API — use them for both trades and points
+    epochs = sorted(all_points[0] if all_points else [], key=lambda ep: ep.since)
+
+    def period_fn(dt: datetime) -> str:
+        if period == "day":
+            return dt.strftime("%Y-%m-%d")
+        for ep in epochs:
+            if ep.since <= dt < ep.until:
+                return _epoch_label(ep)
+        return dt.strftime("%Y-%m-%d")  # fallback: unmatched (before/after all epochs)
+
     for acc, trades in zip(accs, all_trades):
         for t in trades:
             gtrades[period_fn(t.created_at)][acc.name].append(t)
@@ -105,39 +115,32 @@ async def print_stats(accs: list[NadoClient], period="week", filter_period="all"
         for p in pts:
             gpoints[period_fn(p.since)][acc.name] = p.points
 
-    all_periods = sorted(gtrades.keys() | gpoints.keys())
-    periods_to_show = parse_filter(filter_period, all_periods)
-
-    tbl = AutoTable(
-        Column("Account", justify="left"),
-        Column("Trades", "{:,}", total=sum),
-        Column("Volume", "{:,.0f}", total=sum),
-        Column("Burn", "{:,.2f}", total=sum),
-        Column("Points", "{:,.2f}", total=sum),
-        Column("P/Price", "{:,.2f}", compute=lambda r: r["Burn"] / r["Points"]),
-        Column("$/100k", "${:,.2f}", compute=lambda r: r["Burn"] / r["Volume"] * Decimal(1e5)),
-        Column("Fees", "{:,.2f}", total=sum),
-        Column("Fee, %", "{:.3%}", compute=lambda r: r["Fees"] / r["Volume"]),
-        Column("Total Vol", "{:,.0f}", total=sum, grand_total=False),
+    epoch_order = {_epoch_label(ep): ep.since for ep in epochs}
+    all_periods = sorted(
+        gtrades.keys() | gpoints.keys(),
+        key=lambda k: (
+            epoch_order[k]
+            if k in epoch_order
+            else datetime.fromisoformat(k).replace(tzinfo=timezone.utc)
+        ),
     )
-
+    periods_to_show = parse_filter(filter_period, all_periods)
     all_names = [x.name for x in accs]
-    tvol = defaultdict(Decimal)
 
-    for pk in periods_to_show:
-        tbl.subgroup(pk)
-        acc_names = sorted(gtrades[pk].keys() | gpoints[pk].keys())
-        acc_names = [x for x in all_names if x in acc_names]  # keep order of accounts
+    periods_data: dict[str, list[PeriodRow]] = {}
+    for pk in all_periods:
+        acc_names = [n for n in all_names if n in (gtrades[pk].keys() | gpoints[pk].keys())]
+        rows = []
         for acc_name in acc_names:
             trades = gtrades[pk].get(acc_name, [])
             points = gpoints[pk].get(acc_name, Decimal(0))
-            vol = sum(t.amount * t.price for t in trades)
-            pnl = sum(t.realized_pnl - t.fee for t in trades)
-            fee = sum(t.fee for t in trades)
-            tvol[acc_name] += vol
-            tbl.add_row(acc_name, len(trades), vol, -pnl, points, fee, tvol[acc_name])
+            vol = sum((t.amount * t.price for t in trades), Decimal(0))
+            pnl = sum((t.realized_pnl - t.fee for t in trades), Decimal(0))
+            fee = sum((t.fee for t in trades), Decimal(0))
+            rows.append(PeriodRow(acc_name, len(trades), vol, -pnl, points, fee))
+        periods_data[pk] = rows
 
-    tbl.print()
+    render_stats(periods_data, periods_to_show, pprice_fmt="{:,.2f}")
 
 
 # MARK: Main

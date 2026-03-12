@@ -118,7 +118,7 @@ class EtherealClient:
     async def _call(self, method: HttpMethod, path: str, **kwargs):
         rep = await self.http.request(method, path, **kwargs)
         if not rep.ok:
-            raise ApiError(f"API error: {rep.status_code} {rep.text}")
+            raise ApiError(f"API error: {rep.status_code} {rep.text[:200]}")
         return rep.json()
 
     @ttl_cache(3600)

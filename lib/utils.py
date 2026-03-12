@@ -62,12 +62,20 @@ def wait_msg(sec: float) -> str:
 # MARK: Period functions
 
 
-def to_period_week(dt: datetime, genesis: datetime) -> str:
-    """Convert timestamp (ms) to week period string like W01, W02, etc."""
+def _week_date_range(week_start: datetime) -> str:
+    week_end = week_start + timedelta(days=6)
+    return f"{week_start.strftime('%b%d')}-{week_end.strftime('%b%d')}"
+
+
+def to_period_week(dt: datetime, genesis: datetime, prefix: str = "W") -> str:
+    """Convert datetime to week period string like 'W01 Dec18-Dec24'."""
     assert dt.tzinfo == timezone.utc, "to_period_week: dt must be in UTC timezone"
     delta = dt - genesis
     index = delta.days // 7 + 1
-    return f"W{index:02d}" if index > 0 else "OFF"
+    if index <= 0:
+        return f"OFF {_week_date_range(genesis + timedelta(weeks=index - 1))}"
+    week_start = genesis + timedelta(weeks=index - 1)
+    return f"{prefix}{index:02d} {_week_date_range(week_start)}"
 
 
 def to_period_day(dt: datetime) -> str:
@@ -81,7 +89,7 @@ def parse_filter(filter_str: str, all_periods: list[str]) -> list[str]:
     - "all": all periods
     - "this": current (last) period
     - "last": previous period
-    - "-1", "-2", "-3": index from end
+    - "0", "-1", "-2": 0 = current week, -1 = previous, -2 = two ago
     - "W05", "2025-02-19": specific period
     """
     if not all_periods:
@@ -95,9 +103,13 @@ def parse_filter(filter_str: str, all_periods: list[str]) -> list[str]:
         return [all_periods[-2]] if len(all_periods) >= 2 else []
     elif filter_str.lstrip("-").isdigit():
         idx = int(filter_str)
-        return [all_periods[idx]] if abs(idx) <= len(all_periods) else []
-    elif filter_str in all_periods:
-        return [filter_str]
+        if idx > 0:
+            return []
+        # 0 = current (last), -1 = previous, -2 = two ago, etc.
+        real_idx = idx - 1
+        return [all_periods[real_idx]] if abs(real_idx) <= len(all_periods) else []
+    elif matches := [p for p in all_periods if p.startswith(filter_str)]:
+        return matches
     else:
         return []
 

@@ -10,7 +10,7 @@ from clients.omni import OmniClient, OmniPoint
 from lib.cli import create_cli, run_app
 from lib.models import AccountConfig
 from lib.store import DataStore
-from lib.table import AutoTable, Column
+from lib.table import AutoTable, Column, PeriodRow, render_stats
 from lib.utils import gather_accs, parse_filter, short_addr, to_period_day, to_period_week
 from strategy.delta import run_groups
 from strategy.models import StrategyConfig, load_config
@@ -111,36 +111,25 @@ async def print_stats(accs: list[OmniClient], period="week", filter_period="all"
             gvol[p][acc.name] += usd_value
             gcnt[p][acc.name] += 1
 
-    tbl = AutoTable(
-        Column("Account", justify="left"),
-        Column("Trades", "{:,}", total=sum),
-        Column("Volume", "{:,.0f}", total=sum),
-        Column("Burn", "{:,.2f}", total=sum),
-        Column("Points", "{:,.2f}", total=sum),
-        Column("P/Price", "{:,.2f}", compute=lambda r: r["Burn"] / r["Points"]),
-        Column("$/100k", "${:,.2f}", compute=lambda r: r["Burn"] / r["Volume"] * Decimal(1e5)),
-        Column("Total Vol", "{:,.0f}", total=sum, grand_total=False),
-    )
-
     all_periods = sorted(gpnl.keys() | gvol.keys() | gpts.keys())
     periods_to_show = parse_filter(filter_period, all_periods)
-
     all_names = [x.name for x in accs]
-    tvol = defaultdict(Decimal)
 
-    for p in periods_to_show:
-        tbl.subgroup(f"{p}")
-        acc_names = sorted(gpnl[p].keys() | gvol[p].keys() | gpts[p].keys())
-        acc_names = [x for x in all_names if x in acc_names]  # keep order of accounts
+    periods_data: dict[str, list[PeriodRow]] = {}
+    for p in all_periods:
+        acc_names = [
+            n for n in all_names if n in (gpnl[p].keys() | gvol[p].keys() | gpts[p].keys())
+        ]
+        rows = []
         for acc_name in acc_names:
             cnt = gcnt[p][acc_name] or 0
-            pnl = gpnl[p][acc_name] or 0
-            vol = gvol[p][acc_name] or 0
-            pts = gpts[p][acc_name] or 0
-            tvol[acc_name] += vol
-            tbl.add_row(acc_name, cnt, vol, -pnl, pts, tvol[acc_name])
+            pnl = gpnl[p][acc_name] or Decimal(0)
+            vol = gvol[p][acc_name] or Decimal(0)
+            pts = gpts[p][acc_name] or Decimal(0)
+            rows.append(PeriodRow(acc_name, cnt, vol, -pnl, pts, Decimal(0)))
+        periods_data[p] = rows
 
-    tbl.print()
+    render_stats(periods_data, periods_to_show, fees=False, points_fmt="{:,.2f}")
 
 
 # MARK: Main

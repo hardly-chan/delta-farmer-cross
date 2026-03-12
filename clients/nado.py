@@ -147,20 +147,20 @@ class NadoClient:
         if not rep.ok or res.get("status") != "success":
             if res.get("error_code") in _NOT_FOUND_CODES:
                 raise NotFoundError(res.get("error", "Not found"))
-            raise ApiError(f"Query error {rep.status_code}: {rep.text}")
+            raise ApiError(f"Query error {rep.status_code}: {rep.text[:200]}")
         return res.get("data", {})
 
     async def _execute(self, pld: dict) -> dict:
         rep = await self.http.request("POST", "/v1/execute", json=pld)
         if not rep.ok or rep.json().get("status") != "success":
-            raise ApiError(f"Query error {rep.status_code}: {rep.text}")
+            raise ApiError(f"Query error {rep.status_code}: {rep.text[:200]}")
 
         return rep.json().get("data", {})
 
     async def _archive(self, pld: dict) -> dict:
         rep = await self.http.request("POST", "https://archive.prod.nado.xyz/v1", json=pld)
         if not rep.ok:
-            raise ApiError(f"Archive error {rep.status_code}: {rep.text}")
+            raise ApiError(f"Archive error {rep.status_code}: {rep.text[:200]}")
         return rep.json()
 
     @ttl_cache(3600)
@@ -203,7 +203,7 @@ class NadoClient:
         pld = {"ticker_id": f"{symbol}-PERP_USDT0", "depth": 1}
         rep = await self.http.request("GET", "/v2/orderbook", params=pld)
         if not rep.ok:
-            raise ApiError(f"Orderbook error for {symbol} - {rep.status_code}: {rep.text}")
+            raise ApiError(f"Orderbook error for {symbol} - {rep.status_code}: {rep.text[:200]}")
 
         data = rep.json()
         bids = data.get("bids", [])
