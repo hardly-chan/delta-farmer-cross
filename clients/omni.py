@@ -63,6 +63,8 @@ class OmniPoint(BaseModel):
 
 @bind_log_context
 class OmniClient:
+    exchange = "omni"
+
     @classmethod
     def __type_check(cls) -> Type[TradingClient]:
         return OmniClient

@@ -64,8 +64,6 @@ group_size            = 2               # optional: split enabled accounts into 
 regroup_interval      = "12h"           # optional: stop groups, rebalance, then restart
 ```
 
-Use `symbols` only. Legacy `markets` is rejected and must be replaced in configs.
-
 `symbols_per_trade > 1` requires `len(symbols) == symbols_per_trade`; the planner currently supports up to 4 symbols in one cycle.
 
 Duration fields accept `"15s"` / `"5m"` / `"1h"` strings or plain integers (seconds). Range fields accept `[min, max]` lists.

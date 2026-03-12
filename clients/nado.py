@@ -122,6 +122,8 @@ class NadoPoint(BaseModel):
 
 @bind_log_context
 class NadoClient:
+    exchange = "nado"
+
     @classmethod
     def __type_check(cls) -> Type[TradingClient]:
         return NadoClient

@@ -6,12 +6,21 @@ import glob
 import os
 import re
 import sys
+import tomllib
 from collections.abc import Coroutine
 
+from pydantic import BaseModel, Field
+
+from . import telegram as tg
 from . import telemetry
 from .crypto import config_cli_parser
 from .http import FatalError
 from .logger import logger
+from .telegram import TgConfig
+
+
+def eprint(*args, **kwargs):
+    print(*args, **kwargs, file=sys.stderr)
 
 
 def _get_version() -> str:
@@ -27,14 +36,30 @@ def _get_version() -> str:
 VERSION = _get_version()
 
 
-def print_header():
-    print(
-        f":: delta-farmer {VERSION}| https://x.com/uid127 | https://t.me/eazyrekt", file=sys.stderr
-    )
+class _TgOnlyConfig(BaseModel):
+    telegram: TgConfig = Field(default_factory=TgConfig)
 
 
-def create_cli(name: str, config_path: str, sec_fields: list[str]) -> argparse.Namespace:
-    print_header()
+def _load_tg_config(filepath: str) -> TgConfig:
+    try:
+        with open(filepath, "rb") as fp:
+            obj = tomllib.load(fp)
+        return _TgOnlyConfig.model_validate(obj).telegram
+    except Exception:
+        return TgConfig()
+
+
+async def _handle_tgtest(name: str) -> None:
+    if not tg.enabled():
+        eprint("Telegram not configured (set token and chat_id in [telegram] section)")
+        sys.exit(1)
+
+    await tg.send(f"✅ *{name}* — Telegram is working")
+    eprint("Message sent.")
+
+
+async def create_cli(name: str, config_path: str, sec_fields: list[str]) -> argparse.Namespace:
+    eprint(f":: delta-farmer {VERSION}| https://x.com/uid127 | https://t.me/eazyrekt")
 
     cli = argparse.ArgumentParser(prog=name)
     cli.add_argument("-c", "--config", default=config_path, help="Path to config file")
@@ -44,6 +69,7 @@ def create_cli(name: str, config_path: str, sec_fields: list[str]) -> argparse.N
     sub.add_parser("close", help="Close all positions")
     sub.add_parser("info", help="Show accounts info")
     sub.add_parser("clean", help="Delete cached data")
+    sub.add_parser("tgtest", help=argparse.SUPPRESS)
 
     stats_parser = sub.add_parser("stats", help="Show trading stats")
     stats_parser.add_argument(
@@ -53,7 +79,8 @@ def create_cli(name: str, config_path: str, sec_fields: list[str]) -> argparse.N
     stats_parser.add_argument("--force", dest="force", action="store_true", help="Force stats sync")
     stats_parser.add_argument("--sync", dest="force", action="store_true", help=argparse.SUPPRESS)
 
-    handle_config = config_cli_parser(sub, fields=sec_fields)
+    all_fields = list(sec_fields) + ([] if "token" in sec_fields else ["token"])
+    handle_config = config_cli_parser(sub, fields=all_fields)
     args = cli.parse_args()
 
     telemetry.init(exchange=name, command=args.command or "", version=VERSION)
@@ -71,10 +98,17 @@ def create_cli(name: str, config_path: str, sec_fields: list[str]) -> argparse.N
         files = glob.glob(f".cache/{name}_*.pkl")
         for f in files:
             os.remove(f)
-            print(f"Deleted {f}", file=sys.stderr)
+            eprint(f"Deleted {f}")
         if not files:
-            print("No cache files found", file=sys.stderr)
+            eprint("No cache files found")
         exit(0)
+
+    if args.command in ("trade", "tgtest"):
+        tg.init(name, _load_tg_config(args.config))
+
+    if args.command == "tgtest":
+        await _handle_tgtest(name)
+        sys.exit(0)
 
     return args
 
@@ -85,4 +119,4 @@ def run_app(coro: Coroutine) -> None:
     except FatalError as e:
         logger.error(str(e))
     except KeyboardInterrupt:
-        logger.info("Interrupted — closing all positions...")
+        pass

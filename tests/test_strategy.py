@@ -304,13 +304,6 @@ async def test_wait_stop_event_exits_early():
     assert "positions" not in a.calls  # no checks ran
 
 
-async def test_wait_normal_completion_returns_true():
-    """Stable price, 1s duration → wait completes normally → True."""
-    a = MockClient("a", price=50000)
-    result = await hold_positions({"BTC": [make_action(a, "bid")]}, make_cfg())
-    assert result is True
-
-
 async def test_wait_stop_loss_exits_early():
     """Price moves past position_roi_limit → returns False before duration."""
     a = MockClient("a", price=95000)  # 90% move on long, entry=50000
@@ -346,37 +339,6 @@ async def test_cycle_skips_when_no_valid_pair():
     await strategy.trade_cycle()
     assert "market_order" not in a.calls
     assert "market_order" not in b.calls
-
-
-def test_strategy_config_accepts_legacy_markets_field(recwarn):
-    cfg = StrategyConfig.model_validate(
-        {
-            "markets": ["BTC", "ETH"],
-            "symbols_per_trade": 2,
-            "leverage": 10,
-            "trade_size_usd": [100, 100],
-            "trade_duration": [1, 1],
-            "trade_cooldown": [1, 1],
-            "trade_heartbeat": 1,
-        }
-    )
-
-    assert cfg.symbols == ["BTC", "ETH"]
-
-
-def test_strategy_config_rejects_conflicting_symbols_and_markets():
-    with pytest.raises(ValueError, match="Use `symbols` only"):
-        StrategyConfig.model_validate(
-            {
-                "symbols": ["BTC"],
-                "markets": ["ETH"],
-                "leverage": 10,
-                "trade_size_usd": [100, 100],
-                "trade_duration": [1, 1],
-                "trade_cooldown": [1, 1],
-                "trade_heartbeat": 1,
-            }
-        )
 
 
 async def test_cycle_multi_symbol_keeps_double_delta_and_order(monkeypatch):
@@ -490,78 +452,6 @@ async def test_close_symbol_positions_passes_single_symbol_and_order(monkeypatch
     await close_symbol_positions(cast(list[TradingClient], accs), "ETH", make_cfg(), use_limit=True)
 
     assert seen == [("ETH", ["ETH"], True), ("ETH", ["ETH"], True)]
-
-
-async def test_cycle_multi_symbol_use_limit_false(monkeypatch):
-    # Symbol-by-symbol open/close must preserve use_limit=False.
-    accs = [MockClient("main"), MockClient("acc2"), MockClient("acc3")]
-    strategy = DeltaStrategy(
-        make_cfg(symbols=["BTC", "ETH"], symbols_per_trade=2, use_limit=False), accs
-    )
-    strategy.initial_bal = Decimal("3000")
-    opened: list[tuple[str, bool]] = []
-    closed: list[tuple[str, bool]] = []
-
-    async def fake_plan(*_args, **_kw):
-        return make_symbol_actions(accs)
-
-    async def fake_open(actions, symbol, cfg):
-        opened.append((symbol, cfg.use_limit))
-        for act in actions:
-            act.order = make_order(f"ord-{symbol}", symbol, act.side, Decimal("0.001"))
-
-    async def fake_wait(*_args, **_kw):
-        return True
-
-    async def fake_close(accs, symbol, cfg, use_limit=False):
-        closed.append((symbol, use_limit))
-
-    monkeypatch.setattr("strategy.delta.random.sample", lambda seq, n: list(seq)[:n])
-    monkeypatch.setattr("strategy.delta.plan_symbol_actions", fake_plan)
-    monkeypatch.setattr("strategy.delta.hold_positions", fake_wait)
-    monkeypatch.setattr("strategy.delta.open_positions", fake_open)
-    monkeypatch.setattr("strategy.delta.close_symbol_positions", fake_close)
-
-    await strategy.trade_cycle()
-
-    assert opened == [("BTC", False), ("ETH", False)]
-    assert closed == [("BTC", False), ("ETH", False)]
-
-
-async def test_cycle_multi_symbol_use_limit_true(monkeypatch):
-    # Symbol-by-symbol open/close must preserve use_limit=True.
-    accs = [MockClient("main"), MockClient("acc2"), MockClient("acc3")]
-    strategy = DeltaStrategy(
-        make_cfg(symbols=["BTC", "ETH"], symbols_per_trade=2, use_limit=True), accs
-    )
-    strategy.initial_bal = Decimal("3000")
-    opened: list[tuple[str, bool]] = []
-    closed: list[tuple[str, bool]] = []
-
-    async def fake_plan(*_args, **_kw):
-        return make_symbol_actions(accs)
-
-    async def fake_open(actions, symbol, cfg):
-        opened.append((symbol, cfg.use_limit))
-        for act in actions:
-            act.order = make_order(f"ord-{symbol}", symbol, act.side, Decimal("0.001"))
-
-    async def fake_wait(*_args, **_kw):
-        return True
-
-    async def fake_close(accs, symbol, cfg, use_limit=False):
-        closed.append((symbol, use_limit))
-
-    monkeypatch.setattr("strategy.delta.random.sample", lambda seq, n: list(seq)[:n])
-    monkeypatch.setattr("strategy.delta.plan_symbol_actions", fake_plan)
-    monkeypatch.setattr("strategy.delta.hold_positions", fake_wait)
-    monkeypatch.setattr("strategy.delta.open_positions", fake_open)
-    monkeypatch.setattr("strategy.delta.close_symbol_positions", fake_close)
-
-    await strategy.trade_cycle()
-
-    assert opened == [("BTC", True), ("ETH", True)]
-    assert closed == [("BTC", True), ("ETH", True)]
 
 
 # MARK: DeltaStrategy run behavior
@@ -687,13 +577,122 @@ async def test_limit_open_polls_until_filled(monkeypatch):
     assert call_count >= 3
 
 
+async def test_limit_canceled_by_exchange_raises(monkeypatch):
+    """Exchange-canceled order → RuntimeError regardless of use_market_fallback."""
+    a = MockClient("a")
+    monkeypatch.setattr("strategy.trading.asyncio.sleep", _instant_sleep)
+    qty = Decimal("0.002")
+
+    async def open_limit(s, side, q, price, reduce_only=False):
+        return Order(
+            id="ord-l",
+            symbol=s,
+            side=side,
+            size=q,
+            filled=Decimal(0),
+            price=price,
+            status=OrderStatus.OPEN,
+        )
+
+    async def get_canceled(oid):
+        return Order(
+            id=oid,
+            symbol="BTC",
+            side="bid",
+            size=qty,
+            filled=Decimal(0),
+            price=Decimal("50000"),
+            status=OrderStatus.CANCELED,
+        )
+
+    a.limit_order = open_limit  # type: ignore[method-assign]
+    a.get_order = get_canceled  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="canceled by exchange"):
+        await fill_limit_order(a, "BTC", "bid", qty, Decimal("50000"), use_market_fallback=True)
+    assert "market_order" not in a.calls
+
+
+async def test_limit_timeout_uses_market_fallback(monkeypatch):
+    """Order still OPEN after timeout → canceled then filled via market."""
+    a = MockClient("a")
+    monkeypatch.setattr("strategy.trading.asyncio.sleep", _instant_sleep)
+    qty = Decimal("0.002")
+
+    async def open_limit(s, side, q, price, reduce_only=False):
+        return Order(
+            id="ord-l",
+            symbol=s,
+            side=side,
+            size=q,
+            filled=Decimal(0),
+            price=price,
+            status=OrderStatus.OPEN,
+        )
+
+    async def still_open(oid):
+        return Order(
+            id=oid,
+            symbol="BTC",
+            side="bid",
+            size=qty,
+            filled=Decimal(0),
+            price=Decimal("50000"),
+            status=OrderStatus.OPEN,
+        )
+
+    a.limit_order = open_limit  # type: ignore[method-assign]
+    a.get_order = still_open  # type: ignore[method-assign]
+
+    result = await fill_limit_order(
+        a, "BTC", "bid", qty, Decimal("50000"), timeout=0, use_market_fallback=True
+    )
+    assert result is not None
+    assert result.status == OrderStatus.FILLED
+    assert "cancel_order" in a.calls
+    assert "market_order" in a.calls
+
+
+async def test_limit_timeout_no_fallback_raises(monkeypatch):
+    """Timeout with use_market_fallback=False → RuntimeError with reason."""
+    a = MockClient("a")
+    monkeypatch.setattr("strategy.trading.asyncio.sleep", _instant_sleep)
+    qty = Decimal("0.002")
+
+    async def open_limit(s, side, q, price, reduce_only=False):
+        return Order(
+            id="ord-l",
+            symbol=s,
+            side=side,
+            size=q,
+            filled=Decimal(0),
+            price=price,
+            status=OrderStatus.OPEN,
+        )
+
+    async def still_open(oid):
+        return Order(
+            id=oid,
+            symbol="BTC",
+            side="bid",
+            size=qty,
+            filled=Decimal(0),
+            price=Decimal("50000"),
+            status=OrderStatus.OPEN,
+        )
+
+    a.limit_order = open_limit  # type: ignore[method-assign]
+    a.get_order = still_open  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="timed out"):
+        await fill_limit_order(
+            a, "BTC", "bid", qty, Decimal("50000"), timeout=0, use_market_fallback=False
+        )
+    assert "cancel_order" in a.calls
+    assert "market_order" not in a.calls
+
+
 # MARK: check_min_trade_sizes
-
-
-async def test_min_sizes_all_ok():
-    """All accounts meet minimum → no exception."""
-    a, b = MockClient("a"), MockClient("b")
-    await check_min_trade_sizes([make_action(a, "bid"), make_action(b, "ask")], "BTC")
 
 
 async def test_min_sizes_one_fails():

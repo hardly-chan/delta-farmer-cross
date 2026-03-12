@@ -107,6 +107,8 @@ class PacificaPoint(BaseModel):
 
 @bind_log_context
 class PacificaClient:
+    exchange = "pacifica"
+
     @classmethod
     def __type_check(cls) -> Type[TradingClient]:
         return PacificaClient

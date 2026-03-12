@@ -60,6 +60,8 @@ class ProfileInfo(BaseModel):
 class TradingClient(Protocol):
     """Protocol for all trading clients."""
 
+    exchange: str
+
     @property
     def name(self) -> str: ...
 
@@ -189,8 +191,11 @@ async def fill_limit_order(
             return order
 
         if order.status == OrderStatus.CANCELED:
-            log.debug(f"Limit order canceled after {time.time() - started_at:.1f}s")
-            return None
+            elapsed = time.time() - started_at
+            raise RuntimeError(
+                f"Limit {symbol} canceled by exchange after {elapsed:.0f}s"
+                f" (filled {order.filled}/{order.size})"
+            )
 
         if order.filled > 0 and filled_since is None:
             filled_since = time.time()
@@ -203,4 +208,4 @@ async def fill_limit_order(
             if use_market_fallback and remaining > 0:
                 log.debug(f"Limit timeout → market fallback {side} {remaining} {symbol}")
                 return await client.market_order(symbol, side, remaining, reduce_only)
-            return None
+            raise RuntimeError(f"Limit {symbol} timed out after {timeout}s, no fallback")

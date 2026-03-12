@@ -6,11 +6,9 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from functools import partial
 
-from pydantic import BaseModel, Field, SecretStr, field_validator
-
 from clients.omni import OmniClient, OmniPoint
 from lib.cli import create_cli, run_app
-from lib.crypto import decrypt_value, is_encrypted
+from lib.models import AccountConfig
 from lib.store import DataStore
 from lib.table import AutoTable, Column
 from lib.utils import gather_accs, parse_filter, short_addr, to_period_day, to_period_week
@@ -23,18 +21,6 @@ from strategy.trading import close_all
 GENESIS = datetime(2025, 12, 17 - 6, tzinfo=timezone.utc)
 
 to_week_name = partial(to_period_week, genesis=GENESIS)
-
-
-class AccountConfig(BaseModel):
-    name: str
-    privkey: SecretStr = Field(repr=False)
-    proxy: str | None = None
-    enabled: bool = True
-
-    @field_validator("privkey", mode="before")
-    @classmethod
-    def decrypt_privkey(cls, v: str) -> str:
-        return decrypt_value(v) if isinstance(v, str) and is_encrypted(v) else v
 
 
 class Config(StrategyConfig):
@@ -132,7 +118,7 @@ async def print_stats(accs: list[OmniClient], period="week", filter_period="all"
         Column("Burn", "{:,.2f}", total=sum),
         Column("Points", "{:,.2f}", total=sum),
         Column("P/Price", "{:,.2f}", compute=lambda r: r["Burn"] / r["Points"]),
-        Column("V/Price", "{:,.2f}", compute=lambda r: r["Burn"] / r["Volume"] * Decimal(1e5)),
+        Column("$/100k", "${:,.2f}", compute=lambda r: r["Burn"] / r["Volume"] * Decimal(1e5)),
         Column("Total Vol", "{:,.0f}", total=sum, grand_total=False),
     )
 
@@ -165,7 +151,7 @@ def client_from_config(cfg: AccountConfig) -> OmniClient:
 
 
 async def main():
-    cli = create_cli("omni", "configs/omni.toml", ["privkey"])
+    cli = await create_cli("omni", "configs/omni.toml", ["privkey"])
     cfg = Config.load(cli.config)
 
     accs = [(client_from_config(x), x.enabled) for x in cfg.accounts]

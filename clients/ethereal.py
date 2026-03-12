@@ -99,6 +99,8 @@ class EtherealPoint(BaseModel):
 
 @bind_log_context
 class EtherealClient:
+    exchange = "ethereal"
+
     @classmethod
     def __type_check(cls) -> Type[TradingClient]:
         return EtherealClient
@@ -175,8 +177,6 @@ class EtherealClient:
 
         logger.warning(f"USD balance not found for subaccount {sub.id}")
         return Decimal(0)
-
-    # MARK: Markets
 
     @ttl_cache(3600)
     async def symbols(self):

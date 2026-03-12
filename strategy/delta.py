@@ -2,10 +2,12 @@
 # Copyright (c) vladkens | MIT License | Code so clean it squeaks
 import asyncio
 import random
+import time
 from decimal import Decimal
 from itertools import batched
 from typing import Sequence
 
+from lib import telegram as tg
 from lib import telemetry, utils
 from lib.decorators import retry
 from lib.http import FatalError
@@ -70,10 +72,12 @@ class DeltaStrategy:
                 failures += 1
                 if failures >= self.MAX_FAILURES:
                     logger.error("Too many consecutive failures, stopping strategy")
+                    await tg.on_crash(f"{type(e).__name__}: {e}")
                     raise
 
                 msg = f"Cycle failed ({failures}/{self.MAX_FAILURES}) {type(e).__name__}: {e}"
                 logger.warning(msg)
+                await tg.on_error(f"{type(e).__name__}: {e}", failures, self.MAX_FAILURES)
                 await self._wait(60 * 3)  # wait a bit before retrying after a failure
 
     async def trade_cycle(self):
@@ -103,6 +107,12 @@ class DeltaStrategy:
             logger.info(f"Trade {symbol}: {size_usd} = {actions[0].size_usd} + {rest_sizes}")
 
         # 4. Open positions symbol by symbol
+        total_size = float(sum(sum(a.size_usd for a in acts) for acts in symbol_actions.values()))
+        acc_names = [x.client.name for acts in symbol_actions.values() for x in acts]
+        acc_names = list(dict.fromkeys(acc_names))  # unique while preserving order
+        msg_id = await tg.on_trade_start(list(symbol_actions.keys()), total_size, acc_names)
+        stime = time.time()
+
         for symbol, actions in symbol_actions.items():
             await self.open_symbol_positions(symbol, actions)
 
@@ -116,7 +126,9 @@ class DeltaStrategy:
             await close_symbol_positions(acts, symbol, self.cfg, use_limit=use_limit)
 
         # 7. Report P/L
-        await self.report_pnl(balances)
+        pnl = await self.report_pnl(balances)
+        await tg.on_trade_stop(pnl, time.time() - stime, reply_to=msg_id)
+        tg.on_trade(total_size, pnl)
 
     # MARK: Helpers
 
@@ -141,16 +153,18 @@ class DeltaStrategy:
 
         await ensure_leverage([act.client for act in actions], symbol, self.cfg.leverage)
         await open_positions(actions, symbol, self.cfg)
-        if any(act.order is None for act in actions):
-            raise RuntimeError(f"Failed to open positions for {symbol}")
+        failed = [act.client.name for act in actions if act.order is None]
+        if failed:
+            raise RuntimeError(f"Failed to open {symbol} on: {', '.join(failed)}")
 
-    async def report_pnl(self, was: list[tuple[str, float]]):
+    async def report_pnl(self, was: list[tuple[str, float]]) -> float:
         now = await self.get_balances()
         diff_sum = sum(x[1] for x in now) - sum(x[1] for x in was)
         diff_str = [(x[0], x[1] - y[1]) for x, y in zip(now, was)]
         diff_str = " | ".join([f"{name} {diff:+.2f}" for name, diff in diff_str])
         total_pnl = sum(x[1] for x in now) - float(self.initial_bal)
         logger.info(f"Δ {diff_sum:+.2f} ~ {diff_str}; Total P/L: {total_pnl:+.2f}")
+        return diff_sum
 
 
 # MARK: Groups
@@ -218,6 +232,7 @@ async def run_groups(cfg: StrategyConfig, accs: Sequence[TradingClient]) -> None
     cfg, accs = _check_cfg(cfg, accs)
     await _warmup_all(accs)
 
+    tg.start()
     telemetry.track(
         "trade_started",
         {
@@ -226,6 +241,7 @@ async def run_groups(cfg: StrategyConfig, accs: Sequence[TradingClient]) -> None
             "group_mode": cfg.group_size is not None,
             "regroup_interval": cfg.regroup_interval is not None,
             "first_as_main": cfg.first_as_main,
+            "telegram_enabled": tg.enabled(),
         },
     )
 
