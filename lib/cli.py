@@ -86,13 +86,20 @@ async def create_cli(name: str, config_path: str, sec_fields: list[str]) -> argp
     cli.add_argument("-c", "--config", default=config_path, help="Path to config file")
 
     sub = cli.add_subparsers(dest="command")
-    sub.add_parser("trade", help="Run trading manager")
-    sub.add_parser("close", help="Close all positions")
-    sub.add_parser("info", help="Show accounts info")
-    sub.add_parser("clean", help="Delete cached data")
-    sub.add_parser("tgtest", help=argparse.SUPPRESS)
 
-    stats_parser = sub.add_parser("stats", help="Show trading stats")
+    def _sub(name: str, **kw) -> argparse.ArgumentParser:
+        p = sub.add_parser(name, **kw)
+        p.add_argument("-c", "--config", default=argparse.SUPPRESS, help="Path to config file")
+        return p
+
+    _sub("trade", help="Run trading manager")
+    _sub("close", help="Close all positions")
+    _sub("positions", help="Show active positions")
+    _sub("info", help="Show accounts info")
+    _sub("clean", help="Delete cached data")
+    _sub("tgtest", help=argparse.SUPPRESS)
+
+    stats_parser = _sub("stats", help="Show trading stats")
     stats_parser.add_argument(
         "filter", nargs="?", default="all", help="Period filter (all/this/last/W05)"
     )

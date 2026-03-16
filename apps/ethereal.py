@@ -13,7 +13,7 @@ from lib.store import DataStore
 from lib.table import AutoTable, Column, PeriodRow, render_stats
 from lib.utils import gather_accs, parse_filter, short_addr, to_period_day, to_period_week
 from strategy import StrategyConfig, load_config
-from strategy.runner import close_all, run_groups
+from strategy.runner import close_all, print_positions, run_groups
 
 GENESIS = datetime(2025, 12, 18, tzinfo=timezone.utc)
 
@@ -136,6 +136,8 @@ async def main():
             await close_all(act_accs)
         case "trade":
             await run_groups(cfg, act_accs)
+        case "positions":
+            await print_positions(act_accs)
 
 
 if __name__ == "__main__":
