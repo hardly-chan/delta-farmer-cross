@@ -40,9 +40,16 @@ configs.example/ # example config files
 
 **DeltaStrategy** (`strategy/delta.py`) — works with any list of `TradingClient` instances. Trade cycle: fetch balances → pick 1..`symbols_per_trade` symbols → build a per-symbol action plan → validate min sizes → ensure leverage → open positions symbol-by-symbol → hold with ROI safety checks → close symbol-by-symbol → cooldown → repeat. Apps use `run_groups(cfg, accs)` which handles both single and grouped mode.
 
-**Planner** (`strategy/planner.py`) — finds a safe account combination for the sampled trade size, then distributes that size across 1-4 symbols. For multi-symbol cycles it keeps every symbol delta-neutral and also keeps each participating account net-neutral across the full basket.
+**Group parallelism**: each group (typically 2 accounts) runs as an independent asyncio task. Multiple groups execute fully concurrently. Within a single group, symbols are processed sequentially (open symbol A → open symbol B → hold → close A → close B).
 
-**Execution primitives** (`strategy/execution.py`) — stateless async helpers used by DeltaStrategy: `ensure_leverage`, `open_positions`, `close_symbol_positions`, `close_all`, `positions_within_limits`, `hold_positions`. Safety checks now use both per-position ROI and combined basket ROI.
+**Planner** (`strategy/planner.py`) — finds a safe account combination for the sampled trade size, then distributes that size across 1-4 symbols. For multi-symbol cycles it keeps every symbol delta-neutral and also keeps each participating account net-neutral across the full basket. Hedge account sizes have ±10% random jitter (`random_partition` in `lib/utils.py`) — noise is sum-neutral so total exposure stays exact, but individual legs differ slightly to avoid perfectly symmetric patterns.
+
+**Execution primitives** (`strategy/execution.py`) — stateless async helpers used by DeltaStrategy:
+
+- `open_positions`: with `use_limit=True` — main account opens via limit order first (sequential, waits up to `limit_wait`), then all hedge accounts open simultaneously via market. With `use_limit=False` — all accounts open in parallel via market. If limit fails and no fallback — the whole group is aborted via `close_all`.
+- `hold_positions`: heartbeat loop (`trade_heartbeat`) that calls `positions_within_limits` every tick. Returns False early if limits breached or stop_event set. Tolerates transient API errors (logged on 2nd consecutive identical error, then ignored).
+- `positions_within_limits`: **dual-layer safety check** — (1) per-position ROI (`position_roi_limit`, default ±80%) triggers close if any single leg drifts too far; (2) combined basket ROI (`combined_roi_limit`, default ±10%) triggers close if the whole hedge is breaking down even when individual legs look fine. Also detects liquidations and unexpected closes: if a position disappears (API returns 0 positions for a symbol), returns False → triggers emergency `close_all` for the group.
+- `close_all`: best-effort parallel cleanup, retries 3× with backoff, never raises.
 
 **StrategyConfig** (`strategy/models.py`) — base config extended by each app with an `accounts` list:
 

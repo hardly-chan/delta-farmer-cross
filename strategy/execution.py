@@ -100,7 +100,8 @@ async def check_min_trade_sizes(actions: list[TradeAction], symbol: str) -> None
 
 
 async def open_positions(acts: list[TradeAction], symbol: str, cfg: StrategyConfig) -> None:
-    """Open positions. Main account uses limit if configured."""
+    """Open positions for one symbol. With use_limit: main account (acts[0]) fills limit first,
+    then hedge accounts open via market in parallel. On limit failure with no fallback — abort."""
     all_acts = acts
     if cfg.use_limit:
         main, acts = acts[0], acts[1:]
@@ -130,13 +131,12 @@ async def close_symbol_positions(
             side = opposite_side(pos.side)
             await _fill_limit_order(main, pos.symbol, side, pos.size, cfg, reduce_only=True)
 
-    for acc in accs:
-        positions = await acc.positions()
-        positions = [p for p in positions if p.symbol == symbol]
-        for pos in positions:
+    async def _close_market(acc: TradingClient) -> None:
+        for pos in [p for p in await acc.positions() if p.symbol == symbol]:
             await acc.close_position(pos)
-            log = logger.bind(account=acc.name)
-            log.debug(f"Closed {pos.size} {symbol} with market order")
+            logger.bind(account=acc.name).debug(f"Closed {pos.size} {symbol} with market order")
+
+    await asyncio.gather(*[_close_market(acc) for acc in accs])
 
 
 async def _position_state(client: TradingClient, symbol: str) -> Position | None:
@@ -173,6 +173,11 @@ async def positions_within_limits(
     position_roi_limit: Decimal,
     combined_roi_limit: Decimal,
 ) -> bool:
+    """Check per-position ROI and combined basket ROI. Returns False (→ emergency close_all) if:
+    - any position breaches position_roi_limit (single leg drifted too far), or
+    - combined PnL/entry_cost breaches combined_roi_limit (hedge breaking down at portfolio level),
+    - any position disappeared (count != 1) — covers liquidation, manual close, exchange close.
+    """
     total_pnl = Decimal(0)
     total_entry_cost = Decimal(0)
     checks = [(symbol, act) for symbol, actions in symbol_actions.items() for act in actions]
@@ -206,6 +211,10 @@ async def hold_positions(
     cfg: StrategyConfig,
     stop_event: asyncio.Event | None = None,
 ) -> bool:
+    """Hold for trade_duration, calling positions_within_limits every heartbeat.
+    Returns False on early exit (stop_event or safety breach). Tolerates transient API errors
+    (logged on 2nd consecutive identical error) to avoid false-positive emergency closes.
+    """
     duration = cfg.trade_duration.sample()
     logger.info(utils.wait_msg(duration))
 

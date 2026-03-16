@@ -224,8 +224,32 @@ class OmniClient:
     async def limit_order(
         self, symbol: str, side: Side, qty: Decimal, price: Decimal, reduce_only=False
     ) -> Order:
-        # todo: Limit orders not implemented for current strategy, since Omni have zero-fees
-        return await self.market_order(symbol, side, qty, reduce_only)
+        pld = {
+            "order_type": "limit",
+            "limit_price": str(price),
+            "side": "buy" if side == "bid" else "sell",
+            "instrument": {
+                "underlying": symbol,
+                "instrument_type": "perpetual_future",
+                "settlement_asset": "USDC",
+                "funding_interval_s": 3600,
+            },
+            "qty": str(qty),
+            "is_auto_resize": False,
+            "use_mark_price": False,
+            "is_reduce_only": reduce_only,
+        }
+        res = await self._call("POST", "/orders/new/limit", json=pld)
+        return Order(
+            id=str(res["rfq_id"]),
+            symbol=symbol,
+            side=side,
+            size=qty,
+            filled=Decimal(0),
+            price=price,
+            status=OrderStatus.OPEN,
+            reduce_only=reduce_only,
+        )
 
     async def cancel_order(self, order: Order) -> bool:
         try:

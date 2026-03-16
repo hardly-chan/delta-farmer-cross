@@ -195,6 +195,11 @@ def parse_duration(s: str) -> float:
 
 
 def random_partition(M, N, randomness=0.1, precision=0.1):
+    # Splits M into N parts with ±(randomness*100)% jitter per part.
+    # Default randomness=0.1 → ±10% on each part.
+    # Noise is forced sum-neutral: total always equals M exactly.
+    # Used in find_safe_pair to add slight variation to hedge account sizes
+    # so positions are not perfectly symmetric (anti-pattern detection).
     assert 0.0 <= randomness <= 1.0, "randomness must be in [0.0, 1.0]"
     assert precision > 0.0, "precision must be positive"
     assert M >= 0.0, "M must be non-negative"
