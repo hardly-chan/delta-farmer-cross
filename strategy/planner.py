@@ -1,6 +1,5 @@
 # delta-farmer | https://github.com/vladkens/delta-farmer
 # Copyright (c) vladkens | MIT License | Small plans, fewer surprises
-import asyncio
 import random
 from decimal import Decimal
 from typing import Sequence
@@ -10,6 +9,29 @@ from strategy.execution import TradeAction
 from strategy.trading import Side, TradingClient, opposite_side
 
 _MARKET_SIZE_TICK = Decimal("0.001")
+_USD_TICK = Decimal("0.01")
+SAFE_PCT = Decimal("0.96")  # leave 4% margin to avoid liquidation on leverage rounding
+
+
+def calc_total_from_pct(balances: list[tuple[str, float]], leverage: int, pct: float) -> Decimal:
+    """Compute max safe total trade size from account balances in execution order.
+
+    ordered_balances[0] is main (gets 50% of total).
+    ordered_balances[1:] are hedge accounts (split the remaining 50% equally).
+    The binding constraint is the account whose balance is smallest relative to its share.
+    """
+    n = len(balances)
+    n_hedge = n - 1
+    if n_hedge > 0:
+        shares = [Decimal("0.5")] + [Decimal("0.5") / n_hedge] * n_hedge
+    else:
+        shares = [Decimal("1")]
+
+    max_totals = [
+        Decimal(str(bal)) * leverage * SAFE_PCT * Decimal(str(pct)) / share
+        for (_, bal), share in zip(balances, shares)
+    ]
+    return round_to_tick_size(min(max_totals), _USD_TICK)
 
 
 def calc_symbol_sizes(
@@ -48,9 +70,8 @@ async def plan_symbol_actions(
     symbols: Sequence[str],
     total_size_usd: Decimal,
     leverage: int,
+    balances: list[tuple[str, float]],
 ) -> dict[str, list[TradeAction]] | None:
-    balances = await asyncio.gather(*[acc.balance() for acc in accounts])
-    balances = [(acc.name, float(bal)) for acc, bal in zip(accounts, balances)]
     pairs = find_safe_pair(balances, float(total_size_usd), leverage)
     if pairs is None:
         return None

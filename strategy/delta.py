@@ -22,7 +22,7 @@ from strategy.execution import (
     open_positions,
 )
 from strategy.models import StrategyConfig
-from strategy.planner import plan_symbol_actions
+from strategy.planner import calc_total_from_pct, plan_symbol_actions
 from strategy.trading import TradingClient, usd_to_qty
 
 
@@ -83,17 +83,18 @@ class DeltaStrategy:
     async def trade_cycle(self):
         """Run one full trade cycle across the selected symbols."""
         # 1. Get balances
-        balances = await self.get_balances()
+        accounts = self.get_ordered_accounts()
+        balances = await self.get_balances(accounts)
         bal_str = " | ".join([f"{name} {bal:.2f}" for name, bal in balances])
         bal_str = f"{sum(bal for _, bal in balances):.2f} = " + bal_str
         logger.info(f"Balances: {bal_str}")
 
         # 2. Pick symbols and build full plan
-        total_usd = Decimal(str(self.cfg.trade_size_usd.sample()))
         symbols = random.sample(self.cfg.symbols, self.cfg.symbols_per_trade)
-
-        accounts = self.get_ordered_accounts()
-        symbol_actions = await plan_symbol_actions(accounts, symbols, total_usd, self.cfg.leverage)
+        total_usd = self.get_trade_size(balances)
+        symbol_actions = await plan_symbol_actions(
+            accounts, symbols, total_usd, self.cfg.leverage, balances
+        )
         if symbol_actions is None:
             logger.error("No valid account combination found for trading.")
             return
@@ -133,9 +134,17 @@ class DeltaStrategy:
     # MARK: Helpers
 
     @retry(max_attempts=3, delay=2.0)
-    async def get_balances(self) -> list[tuple[str, float]]:
-        bals = await asyncio.gather(*[acc.balance() for acc in self.accounts])
-        return [(acc.name, float(b)) for acc, b in zip(self.accounts, bals)]
+    async def get_balances(
+        self, accs: list[TradingClient] | None = None
+    ) -> list[tuple[str, float]]:
+        accs = accs or self.accounts
+        bals = await asyncio.gather(*[acc.balance() for acc in accs])
+        return [(acc.name, float(b)) for acc, b in zip(accs, bals)]
+
+    def get_trade_size(self, ordered_balances: list[tuple[str, float]]) -> Decimal:
+        if self.cfg.trade_size_pct is not None:
+            return calc_total_from_pct(ordered_balances, self.cfg.leverage, self.cfg.trade_size_pct)
+        return Decimal(str(self.cfg.trade_size_usd.sample()))  # type: ignore[union-attr]
 
     def get_ordered_accounts(self) -> list[TradingClient]:
         return (
@@ -200,6 +209,11 @@ async def _run_group(
 
 def _check_cfg(cfg: StrategyConfig, accs: Sequence[TradingClient]):
     n = len(accs)
+
+    if cfg.trade_size_usd is None and cfg.trade_size_pct is None:
+        raise FatalError("either trade_size_usd or trade_size_pct must be specified in config")
+    if cfg.trade_size_usd is not None and cfg.trade_size_pct is not None:
+        raise FatalError("trade_size_usd and trade_size_pct are mutually exclusive")
 
     if n < 2:
         raise FatalError(f"At least 2 accounts are required for trading, got {n}")

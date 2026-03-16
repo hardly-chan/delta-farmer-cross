@@ -18,7 +18,8 @@ class StrategyConfig(BaseModel):
     symbols: list[str] = Field(..., min_length=1)
     symbols_per_trade: int = Field(1, gt=0, le=4)
     leverage: int = Field(10, gt=0, lt=50)
-    trade_size_usd: SizeRange
+    trade_size_usd: SizeRange | None = None
+    trade_size_pct: float | None = Field(None, ge=0.01, le=1.0)
     trade_duration: TimeRange
     trade_cooldown: TimeRange
     trade_heartbeat: DurationSec = DurationSec("15s")

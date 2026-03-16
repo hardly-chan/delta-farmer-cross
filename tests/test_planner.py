@@ -4,7 +4,7 @@ from typing import cast
 import pytest
 
 from strategy.execution import TradeAction
-from strategy.planner import calc_symbol_sizes, plan_symbol_actions
+from strategy.planner import SAFE_PCT, calc_symbol_sizes, calc_total_from_pct, plan_symbol_actions
 from strategy.trading import Side, TradingClient
 
 
@@ -72,6 +72,7 @@ async def test_plan_symbol_actions_keeps_symbol_and_account_delta_neutral(monkey
         symbols=["BTC", "ETH", "SOL"],
         total_size_usd=Decimal("100"),
         leverage=10,
+        balances=[("main", 1000.0), ("acc2", 1000.0), ("acc3", 1000.0)],
     )
 
     assert plan is not None
@@ -102,9 +103,50 @@ async def test_plan_symbol_actions_returns_none_when_pair_not_found(monkeypatch)
         symbols=["BTC", "ETH"],
         total_size_usd=Decimal("100"),
         leverage=10,
+        balances=[("a", 1000.0), ("b", 1000.0)],
     )
 
     assert plan is None
+
+
+# MARK: calc_total_from_pct
+
+
+def test_calc_total_from_pct_two_accounts():
+    # 2 accounts, each gets 50% share → binding is min balance
+    # min bal = 500, share = 0.5 → total = 500 * 10 * SAFE_PCT / 0.5
+    bals = [("main", 1000.0), ("hedge", 500.0)]
+    assert calc_total_from_pct(bals, leverage=10, pct=1.0) == 500 * 10 * SAFE_PCT / Decimal("0.5")
+
+
+def test_calc_total_from_pct_min_on_main():
+    # min balance on main (50% share) is the binding constraint
+    # main: 100 * 10 * SAFE_PCT / 0.5 ← binding; hedge: 900 * 10 * SAFE_PCT / 0.5
+    bals = [("main", 100.0), ("hedge", 900.0)]
+    assert calc_total_from_pct(bals, leverage=10, pct=1.0) == 100 * 10 * SAFE_PCT / Decimal("0.5")
+
+
+def test_calc_total_from_pct_min_on_hedge():
+    # min balance on hedge (25% share) allows larger total than if it were main
+    # h1: 100 * 10 * SAFE_PCT / 0.25 ← binding
+    bals = [("main", 900.0), ("h1", 100.0), ("h2", 900.0)]
+    assert calc_total_from_pct(bals, leverage=10, pct=1.0) == 100 * 10 * SAFE_PCT / Decimal("0.25")
+
+
+def test_calc_total_from_pct_main_binding_despite_larger_balance():
+    # main has more balance than hedges, but 50% share makes it binding
+    # main: 300 * 10 * SAFE_PCT / 0.5 ← binding; hedges: 200 * 10 * SAFE_PCT / 0.25
+    bals = [("main", 300.0), ("h1", 200.0), ("h2", 200.0)]
+    result = calc_total_from_pct(bals, leverage=10, pct=1.0)
+    assert result == 300 * 10 * SAFE_PCT / Decimal("0.5")
+    assert result < 200 * 10 * SAFE_PCT / Decimal("0.25")
+
+
+def test_calc_total_from_pct_pct_scales_linearly():
+    bals = [("main", 1000.0), ("hedge", 1000.0)]
+    full = calc_total_from_pct(bals, leverage=10, pct=1.0)
+    half = calc_total_from_pct(bals, leverage=10, pct=0.5)
+    assert half == full / 2
 
 
 async def test_plan_symbol_actions_uses_actual_pair_total(monkeypatch):
@@ -121,6 +163,7 @@ async def test_plan_symbol_actions_uses_actual_pair_total(monkeypatch):
         symbols=["BTC", "ETH"],
         total_size_usd=Decimal("100"),
         leverage=10,
+        balances=[("main", 1000.0), ("acc2", 1000.0), ("acc3", 1000.0)],
     )
 
     assert plan is not None
