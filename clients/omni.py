@@ -12,7 +12,7 @@ from lib import utils
 from lib.decorators import bind_log_context, retry, ttl_cache
 from lib.http import ApiError, AsyncHttp, HttpMethod
 from lib.logger import logger
-from strategy.trading import Order, OrderStatus, Position, ProfileInfo, Side, TradingClient
+from strategy import Order, OrderStatus, Position, ProfileInfo, Side, TradingClient
 
 API_URL = "https://omni.variational.io/api"
 APP_URL = "https://omni.variational.io"

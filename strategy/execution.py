@@ -2,32 +2,95 @@
 # Copyright (c) vladkens | MIT License | Code so clean it squeaks
 import asyncio
 import time
-from dataclasses import dataclass
 from decimal import Decimal
 from typing import Sequence
 
 from lib import utils
+from lib.http import FatalError
 from lib.logger import logger
-from strategy.models import StrategyConfig
-from strategy.trading import (
+from lib.utils import round_to_tick_size
+
+from .models import (
     Order,
+    OrderStatus,
     Position,
     Side,
+    StrategyConfig,
+    TradeAction,
     TradingClient,
-    fill_limit_order,
     opposite_side,
 )
 
+# MARK: Limit order
 
-@dataclass
-class TradeAction:
-    """Planned trade for one account."""
 
-    client: TradingClient
-    side: Side
-    size_usd: Decimal
-    qty: Decimal = Decimal(0)
-    order: Order | None = None
+async def fill_limit_order(
+    client: TradingClient,
+    symbol: str,
+    side: Side,
+    qty: Decimal,
+    price: Decimal | None = None,
+    reduce_only=False,
+    timeout=60,
+    use_market_fallback=True,
+) -> Order | None:
+    """Place limit order and wait for fill with optional market fallback."""
+    if price is None:
+        tick_size = await client.get_tick_size(symbol)
+        bid, ask = await client.get_bbo(symbol)
+        raw_price = bid if side == "bid" else ask
+        price = round_to_tick_size(raw_price, tick_size)
+
+    log = logger.bind(account=client.name)
+    log.debug(f"Limit {side} {qty} {symbol} @ {price}")
+    order = await client.limit_order(symbol, side, qty, price, reduce_only)
+    if order.status == OrderStatus.FILLED:
+        return order  # already filled (e.g. exchange falls back to market internally)
+
+    order_id = order.id
+    started_at, filled_since = time.time(), None
+    poll_delay = 0.25  # starts at 250ms, grows to ~3s
+    last_log_at = started_at
+
+    while True:
+        await asyncio.sleep(poll_delay)
+        poll_delay = min(poll_delay * 2.5, 3.0)
+
+        order = await client.get_order(order_id)
+        if order is None:
+            if (time.time() - started_at) > timeout:
+                raise FatalError(f"Limit order {order_id} never appeared — unknown state, aborting")
+            continue  # archive lag — keep polling
+
+        elapsed = time.time() - started_at
+        if time.time() - last_log_at >= 30:
+            fill_pct = f" ({order.filled / order.size:.0%})" if order.filled > 0 else ""
+            log.debug(f"Limit {side} {qty} {symbol}: waiting{fill_pct} elapsed={elapsed:.0f}s")
+            last_log_at = time.time()
+
+        if order.status == OrderStatus.FILLED:
+            log.debug(f"Limit {side} {qty} {symbol} filled in {time.time() - started_at:.1f}s")
+            return order
+
+        if order.status == OrderStatus.CANCELED:
+            elapsed = time.time() - started_at
+            raise RuntimeError(
+                f"Limit {symbol} canceled by exchange after {elapsed:.0f}s"
+                f" (filled {order.filled}/{order.size})"
+            )
+
+        if order.filled > 0 and filled_since is None:
+            filled_since = time.time()
+
+        check_time = filled_since or started_at
+        if (time.time() - check_time) > timeout:
+            log.debug(f"Limit order timeout after {timeout}s")
+            await client.cancel_order(order)
+            remaining = order.size - order.filled
+            if use_market_fallback and remaining > 0:
+                log.debug(f"Limit timeout → market fallback {side} {remaining} {symbol}")
+                return await client.market_order(symbol, side, remaining, reduce_only)
+            raise RuntimeError(f"Limit {symbol} timed out after {timeout}s, no fallback")
 
 
 # MARK: Execution primitives

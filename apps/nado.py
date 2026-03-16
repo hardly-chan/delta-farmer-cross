@@ -12,9 +12,8 @@ from lib.models import AccountConfig
 from lib.store import DataStore
 from lib.table import AutoTable, Column, PeriodRow, render_stats
 from lib.utils import gather_accs, parse_filter, short_addr
-from strategy.delta import run_groups
-from strategy.models import StrategyConfig, load_config
-from strategy.trading import close_all
+from strategy import StrategyConfig, load_config
+from strategy.runner import close_all, run_groups
 
 T = TypeVar("T")
 DD = defaultdict[str, defaultdict[str, T]]

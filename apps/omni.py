@@ -12,9 +12,8 @@ from lib.models import AccountConfig
 from lib.store import DataStore
 from lib.table import AutoTable, Column, PeriodRow, render_stats
 from lib.utils import gather_accs, parse_filter, short_addr, to_period_day, to_period_week
-from strategy.delta import run_groups
-from strategy.models import StrategyConfig, load_config
-from strategy.trading import close_all
+from strategy import StrategyConfig, load_config
+from strategy.runner import close_all, run_groups
 
 # https://docs.variational.io/omni/rewards/points
 # https://omni.variational.io/points (UI counts from -1 week)

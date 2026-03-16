@@ -3,9 +3,8 @@ from typing import cast
 
 import pytest
 
-from strategy.execution import TradeAction
+from strategy import Side, TradeAction, TradingClient
 from strategy.planner import SAFE_PCT, calc_symbol_sizes, calc_total_from_pct, plan_symbol_actions
-from strategy.trading import Side, TradingClient
 
 
 class DummyClient:

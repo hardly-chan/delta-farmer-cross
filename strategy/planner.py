@@ -5,8 +5,8 @@ from decimal import Decimal
 from typing import Sequence
 
 from lib.utils import find_safe_pair, round_to_tick_size
-from strategy.execution import TradeAction
-from strategy.trading import Side, TradingClient, opposite_side
+
+from .models import Side, TradeAction, TradingClient, opposite_side
 
 _MARKET_SIZE_TICK = Decimal("0.001")
 _USD_TICK = Decimal("0.01")

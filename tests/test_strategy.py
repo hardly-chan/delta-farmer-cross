@@ -8,17 +8,24 @@ import pytest
 
 from strategy.delta import DeltaStrategy
 from strategy.execution import (
-    TradeAction,
     _position_roi,
     check_min_trade_sizes,
     close_symbol_positions,
     ensure_leverage,
+    fill_limit_order,
     hold_positions,
     open_positions,
     positions_within_limits,
 )
-from strategy.models import StrategyConfig
-from strategy.trading import Order, OrderStatus, Position, Side, TradingClient, fill_limit_order
+from strategy.models import (
+    Order,
+    OrderStatus,
+    Position,
+    Side,
+    StrategyConfig,
+    TradeAction,
+    TradingClient,
+)
 
 
 async def _instant_sleep(_):
@@ -516,7 +523,7 @@ async def test_limit_open_get_order_none_raises_fatal(monkeypatch):
     from lib.http import FatalError
 
     a = MockClient("a")
-    monkeypatch.setattr("strategy.trading.asyncio.sleep", _instant_sleep)
+    monkeypatch.setattr("strategy.execution.asyncio.sleep", _instant_sleep)
 
     async def open_limit(s, side, qty, price, reduce_only=False):
         return Order(
@@ -539,7 +546,7 @@ async def test_limit_open_get_order_none_raises_fatal(monkeypatch):
 async def test_limit_open_polls_until_filled(monkeypatch):
     """limit_order() returns OPEN, get_order returns FILLED on 3rd call → normal fill path."""
     a = MockClient("a")
-    monkeypatch.setattr("strategy.trading.asyncio.sleep", _instant_sleep)
+    monkeypatch.setattr("strategy.execution.asyncio.sleep", _instant_sleep)
     call_count = 0
 
     async def open_limit(s, side, qty, price, reduce_only=False):
@@ -580,7 +587,7 @@ async def test_limit_open_polls_until_filled(monkeypatch):
 async def test_limit_canceled_by_exchange_raises(monkeypatch):
     """Exchange-canceled order → RuntimeError regardless of use_market_fallback."""
     a = MockClient("a")
-    monkeypatch.setattr("strategy.trading.asyncio.sleep", _instant_sleep)
+    monkeypatch.setattr("strategy.execution.asyncio.sleep", _instant_sleep)
     qty = Decimal("0.002")
 
     async def open_limit(s, side, q, price, reduce_only=False):
@@ -616,7 +623,7 @@ async def test_limit_canceled_by_exchange_raises(monkeypatch):
 async def test_limit_timeout_uses_market_fallback(monkeypatch):
     """Order still OPEN after timeout → canceled then filled via market."""
     a = MockClient("a")
-    monkeypatch.setattr("strategy.trading.asyncio.sleep", _instant_sleep)
+    monkeypatch.setattr("strategy.execution.asyncio.sleep", _instant_sleep)
     qty = Decimal("0.002")
 
     async def open_limit(s, side, q, price, reduce_only=False):
@@ -656,7 +663,7 @@ async def test_limit_timeout_uses_market_fallback(monkeypatch):
 async def test_limit_timeout_no_fallback_raises(monkeypatch):
     """Timeout with use_market_fallback=False → RuntimeError with reason."""
     a = MockClient("a")
-    monkeypatch.setattr("strategy.trading.asyncio.sleep", _instant_sleep)
+    monkeypatch.setattr("strategy.execution.asyncio.sleep", _instant_sleep)
     qty = Decimal("0.002")
 
     async def open_limit(s, side, q, price, reduce_only=False):
