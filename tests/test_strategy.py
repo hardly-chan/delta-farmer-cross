@@ -8,6 +8,7 @@ import pytest
 
 from strategy.delta import DeltaStrategy
 from strategy.execution import (
+    PositionState,
     _position_roi,
     check_min_trade_sizes,
     close_symbol_positions,
@@ -216,10 +217,44 @@ async def test_leverage_skipped_when_correct():
 
 
 async def test_position_roi_single_position():
-    """Single market ROI should return roi, pnl, and entry cost."""
+    """Single market ROI should return roi, pnl, entry cost, and position size."""
     a = MockClient("a", price=55000)
     a._positions = [make_position("BTC", "bid", "0.002", "50000")]
-    assert await _position_roi(a, "BTC") == (Decimal("0.1"), Decimal("10"), Decimal("100"))
+    assert await _position_roi(a, "BTC") == PositionState(
+        roi=Decimal("0.1"), pnl=Decimal("10"), entry_cost=Decimal("100"), size=Decimal("0.002")
+    )
+
+
+async def test_positions_within_limits_detects_size_reduced():
+    """Position reduced externally (ADL / partial fill) must trigger emergency close."""
+    a, b = MockClient("a"), MockClient("b")
+    a._positions = [make_position("BTC", "bid", "0.001", "50000")]  # half of expected
+    b._positions = [make_position("BTC", "ask", "0.002", "50000")]
+
+    symbol_actions = {
+        "BTC": [make_action(a, "bid", qty="0.002"), make_action(b, "ask", qty="0.002")]
+    }
+
+    ok = await positions_within_limits(
+        symbol_actions, position_roi_limit=Decimal("0.8"), combined_roi_limit=Decimal("0.1")
+    )
+    assert ok is False
+
+
+async def test_positions_within_limits_detects_size_increased():
+    """Position grown externally (exchange bug / wrong state) must trigger emergency close."""
+    a, b = MockClient("a"), MockClient("b")
+    a._positions = [make_position("BTC", "bid", "0.004", "50000")]  # double of expected
+    b._positions = [make_position("BTC", "ask", "0.002", "50000")]
+
+    symbol_actions = {
+        "BTC": [make_action(a, "bid", qty="0.002"), make_action(b, "ask", qty="0.002")]
+    }
+
+    ok = await positions_within_limits(
+        symbol_actions, position_roi_limit=Decimal("0.8"), combined_roi_limit=Decimal("0.1")
+    )
+    assert ok is False
 
 
 async def test_positions_within_limits_combined_roi():
@@ -499,8 +534,7 @@ async def test_loop_closes_all_on_exception():
 
     strategy.trade_cycle = boom  # type: ignore[method-assign]
 
-    with pytest.raises(RuntimeError):
-        await strategy.run()
+    await strategy.run()  # returns cleanly after MAX_FAILURES (no raise)
 
     assert "cancel_all_orders" in a.calls
 

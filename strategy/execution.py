@@ -2,6 +2,7 @@
 # Copyright (c) vladkens | MIT License | Code so clean it squeaks
 import asyncio
 import time
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import Sequence
 
@@ -20,6 +21,15 @@ from .models import (
     TradingClient,
     opposite_side,
 )
+
+
+@dataclass
+class PositionState:
+    roi: Decimal
+    pnl: Decimal
+    entry_cost: Decimal
+    size: Decimal
+
 
 # MARK: Limit order
 
@@ -213,14 +223,10 @@ async def _position_state(client: TradingClient, symbol: str) -> Position | None
     return symbol_positions[0]
 
 
-async def _position_roi(
-    client: TradingClient, symbol: str
-) -> tuple[Decimal, Decimal, Decimal] | None:
+async def _position_roi(client: TradingClient, symbol: str) -> PositionState | None:
     pos = await _position_state(client, symbol)
-    if pos is None:
+    if pos is None or pos.size == 0:
         return None
-    if pos.size == 0:
-        return Decimal(0), Decimal(0), Decimal(0)
 
     price = await client.get_price(symbol)
     entry_cost = pos.size * pos.entry_price
@@ -228,7 +234,7 @@ async def _position_roi(
     sign = Decimal(1) if pos.side == "bid" else Decimal(-1)
     pnl = (current_cost - entry_cost) * sign
     roi = pnl / entry_cost
-    return roi, pnl, entry_cost
+    return PositionState(roi, pnl, entry_cost, pos.size)
 
 
 async def positions_within_limits(
@@ -240,6 +246,7 @@ async def positions_within_limits(
     - any position breaches position_roi_limit (single leg drifted too far), or
     - combined PnL/entry_cost breaches combined_roi_limit (hedge breaking down at portfolio level),
     - any position disappeared (count != 1) — covers liquidation, manual close, exchange close.
+    - any position size deviates >5% from expected qty — covers ADL / partial fill on open.
     """
     total_pnl = Decimal(0)
     total_entry_cost = Decimal(0)
@@ -250,13 +257,19 @@ async def positions_within_limits(
         if state is None:
             return False
 
-        roi, pnl, entry_cost = state
-        if abs(roi) >= position_roi_limit:
-            logger.info(f"Position {symbol} on {act.client.name} hit {roi:.2%}, closing...")
+        if act.qty and abs(state.size - act.qty) / act.qty > Decimal("0.05"):
+            logger.info(
+                f"Position {symbol} on {act.client.name}: "
+                f"size {state.size} != expected {act.qty}, closing..."
+            )
             return False
 
-        total_pnl += pnl
-        total_entry_cost += entry_cost
+        if abs(state.roi) >= position_roi_limit:
+            logger.info(f"Position {symbol} on {act.client.name} hit {state.roi:.2%}, closing...")
+            return False
+
+        total_pnl += state.pnl
+        total_entry_cost += state.entry_cost
 
     if total_entry_cost == 0:
         return True
