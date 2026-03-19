@@ -125,7 +125,7 @@ class PacificaClient:
     async def _call(self, method: HttpMethod, path: str, **kwargs):
         rep = await self.http.request(method, path, **kwargs)
         if not rep.ok and '"success":' not in rep.text:
-            raise ApiError(f"Unknown API error: {rep.status_code} {rep.text[:200]}")
+            raise ApiError("API error", rep)
         res = rep.json()
         if not res["success"]:
             raise ApiError(res["error"])

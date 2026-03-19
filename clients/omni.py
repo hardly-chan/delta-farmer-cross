@@ -99,7 +99,7 @@ class OmniClient:
         pld = {"address": self.address}
         rep = await self.http.request("POST", f"{API_URL}/auth/generate_signing_data", json=pld)
         if not rep.text.startswith("omni.variational.io wants you to"):
-            raise ApiError(f"Unexpected signing data: {rep.text[:200]}")
+            raise ApiError("Unexpected signing data", rep)
 
         msg = encode_defunct(text=rep.text)
         sig = self.account.sign_message(msg).signature.hex().replace("0x", "")
@@ -107,14 +107,14 @@ class OmniClient:
         pld = {"address": self.address, "signed_message": sig}
         rep = await self.http.request("POST", f"{API_URL}/auth/login", json=pld)
         if not rep.ok or "vr-token" not in self.http.session.cookies:
-            raise ApiError(f"Login failed: {rep.status_code} {rep.text[:200]}")
+            raise ApiError("Login failed", rep)
         return True
 
     async def _call(self, method: HttpMethod, path: str, **kwargs):
         await self._ensure_auth()
         rep = await self.http.request(method, path, **kwargs)
         if not rep.ok:
-            raise ApiError(f"API error: {rep.status_code} {rep.text[:200]}")
+            raise ApiError("API error", rep)
         return rep.json()
 
     # MARK: Account

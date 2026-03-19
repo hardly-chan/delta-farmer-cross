@@ -79,7 +79,7 @@ class HyenaClient(HyperLiquidClient):
             "GET", "/api/auth/nonce", params={"address": self.address}
         )
         if not rep.ok:
-            raise ApiError(f"Nonce failed: {rep.status_code} {rep.text[:200]}")
+            raise ApiError("Nonce failed", rep)
         nonce = rep.json()["nonce"]
 
         issued_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
@@ -102,7 +102,7 @@ class HyenaClient(HyperLiquidClient):
             "POST", "/api/auth", json={"message": message, "signature": signature}
         )
         if not rep.ok:
-            raise ApiError(f"SIWE auth failed: {rep.status_code} {rep.text[:200]}")
+            raise ApiError("SIWE auth failed", rep)
 
         jwt: str = rep.json()["token"]
         self._jwt = jwt
@@ -127,7 +127,7 @@ class HyenaClient(HyperLiquidClient):
                 "GET", path, headers={"Authorization": f"Bearer {jwt}"}, **kwargs
             )
         if not rep.ok:
-            raise ApiError(f"Hyena GET {path} failed: {rep.status_code} {rep.text[:200]}")
+            raise ApiError(f"Hyena GET {path} failed", rep)
         return rep.json()
 
     # MARK: Account

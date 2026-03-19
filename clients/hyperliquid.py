@@ -84,7 +84,7 @@ class HyperLiquidClient:
     async def _info(self, **kwargs: Any) -> Any:
         rep = await self.http.request("POST", "/info", json=kwargs)
         if not rep.ok:
-            raise ApiError(f"Info error {rep.status_code}: {rep.text[:200]}")
+            raise ApiError("Info error", rep)
         return rep.json()
 
     def _sign_l1_action(self, action: dict, nonce: int) -> dict:
@@ -109,10 +109,10 @@ class HyperLiquidClient:
             "POST", "/exchange", json={"action": action, "nonce": nonce, "signature": sig}
         )
         if not rep.ok:
-            raise ApiError(f"Exchange error {rep.status_code}: {rep.text[:200]}")
+            raise ApiError("Exchange error", rep)
         res = rep.json()
         if res is None:
-            raise ApiError(f"Exchange returned null: {rep.text[:200]}")
+            raise ApiError("Exchange returned null", rep)
         if res.get("status") != "ok":
             raise ApiError(f"Exchange rejected: {res}")
         return res

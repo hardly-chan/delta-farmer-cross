@@ -1,4 +1,4 @@
-.PHONY: lint update clean deploy stats stats-was stats-now
+.PHONY: lint test update clean deploy stats stats-was stats-now
 p ?= all
 
 lint:
