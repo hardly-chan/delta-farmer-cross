@@ -198,7 +198,7 @@ async def smoke(client: TradingClient, symbol: str, size_usd: float) -> tuple[in
 
 async def main():
     parser = argparse.ArgumentParser(prog="smoke", description="Smoke test for exchange clients")
-    exchanges = ["ethereal", "hyena", "hyperliquid", "nado", "omni", "pacifica"]
+    exchanges = ["ethereal", "hyena", "hyperliquid", "nado", "omni", "onyx", "pacifica"]
     parser.add_argument("exchange", choices=exchanges)
     parser.add_argument("symbol", help="Symbol to test (must NOT be in config symbols)")
     parser.add_argument("size", type=float, help="Trade size in USD")
@@ -227,6 +227,8 @@ async def main():
             from apps.nado import Config, client_from_config
         case "omni":
             from apps.omni import Config, client_from_config
+        case "onyx":
+            from apps.onyx import Config, client_from_config
         case "pacifica":
             from apps.pacifica import Config, client_from_config
         case _:
@@ -241,7 +243,8 @@ async def main():
             f"symbol '{args.symbol}' is in config symbols {cfg.symbols} — "
             "pick a different symbol to avoid conflicting with the running bot"
         )
-    symbol = args.symbol
+    normalize = getattr(client, "_coin", lambda s: s)
+    symbol = normalize(args.symbol)  # normalize: "ETH" → "hyna:ETH" etc.
 
     print(f"exchange : {args.exchange}")
     print(f"account  : {acc_cfg.name}")

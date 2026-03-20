@@ -5,7 +5,7 @@ import struct
 import time
 from decimal import Decimal
 from math import floor, log10
-from typing import Any, Type
+from typing import Any, NoReturn, Type
 
 import msgpack
 from eth_account import Account
@@ -52,7 +52,12 @@ def _fmt(x: Decimal) -> str:
 @bind_log_context
 class HyperLiquidClient:
     exchange: str  # set by subclass
-    dex_prefix: str = ""  # "" = standard HL, "hyna" etc. for HIP-3
+    # HIP-3 market namespace. Two roles:
+    # 1. API routing — passed as `dex=` param in HL info/exchange calls
+    # 2. Input normalization — _coin() adds prefix to plain symbols (e.g. "ETH" → "hyna:ETH")
+    #    All output (positions, orders) always returns full coin names (e.g. "hyna:ETH").
+    # "" = native HyperLiquid markets (no prefix, no dex param)
+    dex_prefix: str = ""
 
     @classmethod
     def __type_check(cls) -> Type[TradingClient]:
@@ -73,13 +78,15 @@ class HyperLiquidClient:
     def _coin(self, symbol: str) -> str:
         return f"{self.dex_prefix}:{symbol}" if self.dex_prefix else symbol
 
-    def _strip(self, coin: str) -> str:
-        prefix = f"{self.dex_prefix}:"
-        return coin[len(prefix) :] if self.dex_prefix and coin.startswith(prefix) else coin
+    @staticmethod
+    def _sym_dex(symbol: str) -> str:
+        """Extract DEX prefix from symbol, e.g. 'xyz:TSLA' → 'xyz'."""
+        return symbol.split(":")[0] if ":" in symbol else ""
 
-    @property
-    def _dex(self) -> dict:
-        return {"dex": self.dex_prefix} if self.dex_prefix else {}
+    def _resolve(self, symbol: str) -> tuple[str, str]:
+        """Returns (dex, coin_on_wire). Handles 'xyz:TSLA' and plain symbol with prefix."""
+        dex = self._sym_dex(symbol)
+        return (dex, symbol) if dex else (self.dex_prefix, self._coin(symbol))
 
     async def _info(self, **kwargs: Any) -> Any:
         rep = await self.http.request("POST", "/info", json=kwargs)
@@ -102,12 +109,15 @@ class HyperLiquidClient:
         r, s, v = signed.r, signed.s, signed.v
         return {"r": f"0x{r:064x}", "s": f"0x{s:064x}", "v": v}
 
+    _builder: dict | None = None  # set by subclass to include builder fee in orders
+
     async def _exchange(self, action: dict) -> dict:
         nonce = int(time.time() * 1000)
+        if self._builder and action.get("type") == "order":
+            action = {**action, "builder": self._builder}
         sig = self._sign_l1_action(action, nonce)
-        rep = await self.http.request(
-            "POST", "/exchange", json={"action": action, "nonce": nonce, "signature": sig}
-        )
+        payload: dict = {"action": action, "nonce": nonce, "signature": sig}
+        rep = await self.http.request("POST", "/exchange", json=payload)
         if not rep.ok:
             raise ApiError("Exchange error", rep)
         res = rep.json()
@@ -120,41 +130,49 @@ class HyperLiquidClient:
     # MARK: Metadata
 
     @ttl_cache(3600)
-    async def _meta(self) -> dict:
-        return await self._info(type="meta", **self._dex)
-
-    @ttl_cache(3600)
-    async def _dex_index(self) -> int:
-        dexs = await self._info(type="perpDexs")
-        for i, dex in enumerate(dexs):
-            if dex and dex.get("name") == self.dex_prefix:
-                return i  # perpDexs[i] maps directly to allPerpMetas[i]
-        raise ApiError(f"DEX not found in perpDexs: {self.dex_prefix}")
-
-    async def _asset_id(self, symbol: str) -> int:
-        meta = await self._meta()
-        coin = self._coin(symbol)
-        for local_idx, asset in enumerate(meta["universe"]):
-            if asset["name"] == coin:
-                if not self.dex_prefix:
-                    return local_idx
-                dex_idx = await self._dex_index()
-                return dex_idx * 10000 + 100000 + local_idx
-        raise ApiError(f"Symbol not found: {symbol}")
+    async def _meta_for(self, dex: str) -> dict:
+        return await self._info(type="meta", **({} if not dex else {"dex": dex}))
 
     @ttl_cache(5)
-    async def _asset_ctxs(self) -> list[dict]:
-        rep = await self._info(type="metaAndAssetCtxs", **self._dex)
-        return rep[1]
+    async def _ctxs_for(self, dex: str) -> list[dict]:
+        return (await self._info(type="metaAndAssetCtxs", **({} if not dex else {"dex": dex})))[1]
+
+    @ttl_cache(3600)
+    async def _dex_idx_for(self, dex: str) -> int:
+        for i, d in enumerate(await self._info(type="perpDexs")):
+            if d and d.get("name") == dex:
+                return i
+        raise ApiError(f"DEX not found: {dex}")
+
+    async def _symbol_not_found(self, symbol: str) -> NoReturn:
+        msg = f"Symbol not found: {symbol!r}"
+        if ":" not in symbol:
+            for d in await self._dex_names():
+                for asset in (await self._meta_for(d))["universe"]:
+                    if asset["name"].endswith(f":{symbol}"):
+                        raise ApiError(f"{msg} (did you mean {asset['name']!r}?)")
+
+        raise ApiError(msg)
+
+    async def _asset_id(self, symbol: str) -> int:
+        dex, coin = self._resolve(symbol)
+        meta = await self._meta_for(dex)
+        for local_idx, asset in enumerate(meta["universe"]):
+            if asset["name"] == coin:
+                if not dex:
+                    return local_idx
+                dex_idx = await self._dex_idx_for(dex)
+                return dex_idx * 10000 + 100000 + local_idx
+        await self._symbol_not_found(symbol)
 
     async def _asset_ctx(self, symbol: str) -> dict:
-        meta = await self._meta()
-        ctxs = await self._asset_ctxs()
-        coin = self._coin(symbol)
+        dex, coin = self._resolve(symbol)
+        meta = await self._meta_for(dex)
+        ctxs = await self._ctxs_for(dex)
         for i, asset in enumerate(meta["universe"]):
             if asset["name"] == coin:
                 return ctxs[i]
-        raise ApiError(f"Symbol not found: {symbol}")
+        await self._symbol_not_found(symbol)
 
     # MARK: Lifecycle
 
@@ -169,16 +187,15 @@ class HyperLiquidClient:
 
     @ttl_cache(3600)
     async def get_symbols(self) -> list[str]:
-        meta = await self._meta()
-        return [self._strip(a["name"]) for a in meta["universe"] if not a.get("isDelisted")]
+        meta = await self._meta_for(self.dex_prefix)
+        return [a["name"] for a in meta["universe"] if not a.get("isDelisted")]
 
     async def get_lot_size(self, symbol: str) -> Decimal:
-        meta = await self._meta()
-        coin = self._coin(symbol)
-        for asset in meta["universe"]:
+        dex, coin = self._resolve(symbol)
+        for asset in (await self._meta_for(dex))["universe"]:
             if asset["name"] == coin:
                 return Decimal(10) ** -asset["szDecimals"]
-        raise ApiError(f"Symbol not found: {symbol}")
+        await self._symbol_not_found(symbol)
 
     async def get_tick_size(self, symbol: str) -> Decimal:
         mid = float(await self.get_price(symbol))
@@ -206,8 +223,10 @@ class HyperLiquidClient:
         return Decimal(str(rep["marginSummary"]["accountValue"]))
 
     async def get_leverage(self, symbol: str) -> int | None:
-        rep = await self._info(type="clearinghouseState", user=self.address, **self._dex)
-        coin = self._coin(symbol)
+        dex, coin = self._resolve(symbol)
+        rep = await self._info(
+            type="clearinghouseState", user=self.address, **({} if not dex else {"dex": dex})
+        )
         for pos in rep.get("assetPositions", []):
             p = pos["position"]
             if p["coin"] == coin:
@@ -223,32 +242,48 @@ class HyperLiquidClient:
             "asset": asset_id,
             "isCross": False,
             "leverage": leverage,
-        }  # noqa: E501
+        }
         await self._exchange(action)
 
     # MARK: Positions
 
+    async def _dex_names(self) -> list[str]:
+        # HL API: clearinghouseState `dex` param defaults to "" (native HL only), no "all" option.
+        # Must query each DEX separately. Single-DEX clients use dex_prefix; aggregators query all.
+        if self.dex_prefix:
+            return [self.dex_prefix]
+        return [""] + [d["name"] for d in await self._info(type="perpDexs") if d]
+
     async def positions(self) -> list[Position]:
-        rep = await self._info(type="clearinghouseState", user=self.address, **self._dex)
-        result = []
-        for pos in rep.get("assetPositions", []):
-            p = pos["position"]
-            szi = Decimal(str(p["szi"]))
-            if szi == 0:
-                continue
-            symbol = self._strip(p["coin"])
-            side: Side = "bid" if szi > 0 else "ask"
-            entry_px = p.get("entryPx")
-            result.append(
-                Position(
-                    id=symbol,
-                    symbol=symbol,
-                    side=side,
-                    size=abs(szi),
-                    entry_price=Decimal(str(entry_px)) if entry_px else Decimal(0),
-                    unrealized_pnl=Decimal(str(p.get("unrealizedPnl", 0))),
+        dex_list = await self._dex_names()
+        reps = await asyncio.gather(
+            *[
+                self._info(
+                    type="clearinghouseState", user=self.address, **({} if not d else {"dex": d})
                 )
-            )
+                for d in dex_list
+            ]
+        )
+        result = []
+        for rep in reps:
+            for pos in rep.get("assetPositions", []):
+                p = pos["position"]
+                szi = Decimal(str(p["szi"]))
+                if szi == 0:
+                    continue
+                symbol = p["coin"]
+                side: Side = "bid" if szi > 0 else "ask"
+                entry_px = p.get("entryPx")
+                result.append(
+                    Position(
+                        id=symbol,
+                        symbol=symbol,
+                        side=side,
+                        size=abs(szi),
+                        entry_price=Decimal(str(entry_px)) if entry_px else Decimal(0),
+                        unrealized_pnl=Decimal(str(p.get("unrealizedPnl", 0))),
+                    )
+                )
         return result
 
     async def close_position(self, position: Position) -> bool:
@@ -325,7 +360,13 @@ class HyperLiquidClient:
         return await self._place_order(symbol, side, qty, price, "Gtc", reduce_only)
 
     async def get_order(self, order_id: str) -> Order | None:
-        rep = await self._info(type="orderStatus", user=self.address, oid=int(order_id))
+        dex = self.dex_prefix
+        rep = await self._info(
+            type="orderStatus",
+            user=self.address,
+            oid=int(order_id),
+            **({} if not dex else {"dex": dex}),
+        )
         if rep.get("status") != "order":
             return None
         o = rep["order"]["order"]
@@ -340,7 +381,7 @@ class HyperLiquidClient:
         orig_sz = Decimal(str(o["origSz"]))
         return Order(
             id=order_id,
-            symbol=self._strip(o["coin"]),
+            symbol=o["coin"],
             side="bid" if o["side"] == "B" else "ask",
             size=orig_sz,
             filled=orig_sz - sz,
@@ -360,16 +401,19 @@ class HyperLiquidClient:
             return False
 
     async def cancel_all_orders(self) -> int:
-        rep = await self._info(type="openOrders", user=self.address, **self._dex)
-        orders = rep if isinstance(rep, list) else []
-        if not orders:
-            return 0
-        cancels = []
-        for o in orders:
-            asset_id = await self._asset_id(self._strip(o["coin"]))
-            cancels.append({"a": asset_id, "o": o["oid"]})
-        await self._exchange({"type": "cancel", "cancels": cancels})
-        return len(cancels)
+        dex_list = await self._dex_names()
+        total = 0
+        for dex in dex_list:
+            rep = await self._info(
+                type="openOrders", user=self.address, **({} if not dex else {"dex": dex})
+            )
+            orders = rep if isinstance(rep, list) else []
+            if not orders:
+                continue
+            cancels = [{"a": await self._asset_id(o["coin"]), "o": o["oid"]} for o in orders]
+            await self._exchange({"type": "cancel", "cancels": cancels})
+            total += len(cancels)
+        return total
 
     # MARK: Profile
 

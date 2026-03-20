@@ -85,7 +85,7 @@ T = TypeVar("T", bound=HasName)
 
 def bind_log_context(cls: Type[T]) -> Type[T]:
     for attr_name, attr in cls.__dict__.items():
-        if attr_name.startswith("__") or not callable(attr):
+        if attr_name.startswith("__") or not callable(attr) or isinstance(attr, staticmethod):
             continue
 
         if inspect.iscoroutinefunction(attr):

@@ -2,7 +2,7 @@
 
 > Update this file after any structural change without being asked.
 
-Delta-neutral trading bot. Exchanges: Ethereal, Omni, Nado, Pacifica.
+Delta-neutral trading bot. Exchanges: Ethereal, HyperLiquid, Hyena, Nado, Omni, Onyx, Pacifica.
 
 ## Module map
 
@@ -14,9 +14,11 @@ Delta-neutral trading bot. Exchanges: Ethereal, Omni, Nado, Pacifica.
 | `strategy/delta.py` | `DeltaStrategy` class only |
 | `strategy/runner.py` | `run_groups` (app entry point), `close_all` (with warmup — CLI only) |
 | `lib/models.py` | `DurationSec`, `SizeRange`, `TimeRange`, `TgConfig`, `AccountConfig` |
+| `lib/decorators.py` | `retry`, `ttl_cache`, `bind_log_context` |
 | `lib/utils.py` | math, time, file I/O, `random_partition`, `find_safe_pair`, async helpers |
 | `lib/telegram.py` | notifications: `on_trade_start/stop`, `on_error`, `on_crash` |
-| `clients/{exchange}.py` | implement `TradingClient` |
+| `clients/hyperliquid.py` | `HyperLiquidClient` — base class for all HL-family exchanges; HIP-3 aware |
+| `clients/{exchange}.py` | implement `TradingClient` (or extend `HyperLiquidClient`) |
 | `apps/{exchange}.py` | CLI launcher per exchange |
 
 ## Two `close_all` — don't mix up
@@ -67,10 +69,33 @@ Dual-layer, runs every `trade_heartbeat`:
 
 Transient API errors: logged only on 2nd consecutive identical error, then ignored (avoid false-positive closes).
 
+## HyperLiquid family (HyperLiquid, Hyena, Onyx)
+
+`HyperLiquidClient` is the shared base. Subclasses override:
+- `exchange` — string name
+- `dex_prefix` — HIP-3 namespace (e.g. `"hyna"`); `""` = native HL markets
+- `_builder` — builder fee dict injected into every order, or `None`
+
+**Symbol prefix system** — internally always full `"dex:SYMBOL"` format on the wire. `_resolve(symbol)` → `(dex, coin_on_wire)`:
+- Symbol already has `:` (e.g. `"xyz:TSLA"`) → used as-is
+- Symbol has no `:` → auto-prefixed with `dex_prefix` if set, else kept bare
+
+**Config rules per exchange:**
+- **Hyena** (`dex_prefix="hyna"`): bare `"BTC"` is fine — auto-becomes `"hyna:BTC"` on wire
+- **Onyx** (`dex_prefix=""`): no auto-prefix; write `"xyz:TSLA"` for HIP-3 markets, bare `"BTC"` for native HL
+- **HyperLiquid** (`dex_prefix=""`): bare symbols only, no HIP-3
+
+**Onyx** has no own clearinghouse — it injects a builder fee to attribute volume. Auth is SIWE via Privy, user stats from Arjuna API. Positions live on native HL or whichever HIP-3 DEX is specified per symbol.
+
 ## Adding an exchange
 
+**Standalone exchange:**
 1. `clients/{exchange}.py` — implement `TradingClient` (`strategy/models.py`). `exchange = "..."` class var. Qty in base asset only, never USD.
 2. `apps/{exchange}.py` — follow `apps/pacifica.py`. `Config(StrategyConfig)` with `accounts: list[AccountConfig]`. Commands: `trade` → `run_groups`, `close` → `runner.close_all`, `info`/`stats` → custom.
+
+**HyperLiquid-based exchange:**
+1. `clients/{exchange}.py` — extend `HyperLiquidClient`. Set `exchange`, `dex_prefix`, and optionally `_builder`.
+2. `apps/{exchange}.py` — same structure as above.
 
 ## Conventions
 
