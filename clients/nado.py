@@ -567,7 +567,7 @@ class NadoClient:
 
             res = await self._archive(pld)
             res = res.get("orders", [])
-            cursor = res[-1]["submission_idx"]
+            cursor = res[-1]["submission_idx"] if res else None
             has_more = len(res) >= limit
 
             for o in res:

@@ -17,14 +17,15 @@ Automated delta-neutral trading for crypto points farming. Run classic two-sided
 
 ## Supported Protocols
 
-| Protocol                                   | Tech     | Status      |
-| ------------------------------------------ | -------- | ----------- |
-| [Pacifica](https://pacifica.fi)            | Solana   | Ready       |
-| [Omni](https://omni.variational.io)        | EVM      | Ready       |
-| [Ethereal](https://app.ethereal.trade/)    | EVM      | Ready       |
-| [Nado](https://app.nado.xyz/)              | EVM      | Ready       |
-| [HyENA](https://app.hyena.trade/)          | EVM      | In Progress |
-| [Extended](https://app.extended.exchange/) | Starknet | In Progress |
+| Protocol                                   | Tech        | Status |
+| ------------------------------------------ | ----------- | ------ |
+| [Pacifica](https://pacifica.fi)            | Solana      | Ready  |
+| [Omni](https://omni.variational.io)        | EVM         | Ready  |
+| [Ethereal](https://app.ethereal.trade/)    | EVM         | Ready  |
+| [Nado](https://app.nado.xyz/)              | EVM         | Ready  |
+| [HyENA](https://app.hyena.trade/)          | HyperLiquid | Ready  |
+| [Onyx](https://app.onyx.xyz/)              | HyperLiquid | Ready  |
+| [ZeroOne](https://01.xyz/)                 | Solana      | Ready  |
 
 ## Installation
 
@@ -46,7 +47,7 @@ uv sync
 ## Quick Start
 
 ```bash
-# Replace <app> with: pacifica, omni, ethereal, nado
+# Replace <app> with: pacifica, omni, ethereal, nado, hyena, onyx, zero1
 cp configs.example/<app>.toml configs/<app>.toml
 # Edit configs/<app>.toml with your private keys
 
@@ -59,7 +60,7 @@ uv run -m apps.<app> trade           # Start trading
 All protocols share common commands:
 
 ```bash
-# Replace <app> with: pacifica, omni, ethereal, nado
+# Replace <app> with: pacifica, omni, ethereal, nado, hyena, onyx, zero1
 
 # Trading
 uv run -m apps.<app> trade          # Start automated trading

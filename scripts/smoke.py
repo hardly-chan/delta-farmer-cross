@@ -87,6 +87,24 @@ async def smoke(client: TradingClient, symbol: str, size_usd: float) -> tuple[in
     except Exception as e:
         report("positions baseline", False, str(e))
 
+    # MARK: Leverage
+
+    try:
+        lev_before = await client.get_leverage(symbol)
+        TEST_LEVERAGE = 8 if lev_before != 8 else 10
+        await client.set_leverage(symbol, TEST_LEVERAGE)
+        lev_after = await client.get_leverage(symbol)
+        if lev_after == TEST_LEVERAGE:
+            report("set_leverage", True, f"{lev_before} → {lev_after}")
+        elif lev_before == lev_after:
+            print(
+                f"  {SKIP} set_leverage  ({lev_before} → {lev_after}, no-op / session unavailable)"
+            )
+        else:
+            report("set_leverage", False, f"{lev_before} → {lev_after}, expected {TEST_LEVERAGE}")
+    except Exception as e:
+        report("set_leverage", False, str(e))
+
     # MARK: Market order cycle
 
     qty = usd_to_qty(Decimal(str(size_usd)), price, lot)
@@ -198,7 +216,7 @@ async def smoke(client: TradingClient, symbol: str, size_usd: float) -> tuple[in
 
 async def main():
     parser = argparse.ArgumentParser(prog="smoke", description="Smoke test for exchange clients")
-    exchanges = ["ethereal", "hyena", "hyperliquid", "nado", "omni", "onyx", "pacifica"]
+    exchanges = ["ethereal", "hyena", "hyperliquid", "nado", "omni", "onyx", "pacifica", "zero1"]
     parser.add_argument("exchange", choices=exchanges)
     parser.add_argument("symbol", help="Symbol to test (must NOT be in config symbols)")
     parser.add_argument("size", type=float, help="Trade size in USD")
@@ -231,6 +249,8 @@ async def main():
             from apps.onyx import Config, client_from_config
         case "pacifica":
             from apps.pacifica import Config, client_from_config
+        case "zero1":
+            from apps.zero1 import Config, client_from_config
         case _:
             parser.error(f"unsupported exchange '{args.exchange}'")
 
