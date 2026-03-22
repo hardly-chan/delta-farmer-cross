@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from lib import utils
 from lib.decorators import bind_log_context
 from lib.http import ApiError, AsyncHttp
-from strategy import ProfileInfo, TradingClient
+from strategy import Position, ProfileInfo, TradingClient
 
 from .hyperliquid import HyperLiquidClient
 
@@ -128,6 +128,14 @@ class HyenaClient(HyperLiquidClient):
         if not rep.ok:
             raise ApiError(f"Hyena GET {path} failed", rep)
         return rep.json()
+
+    def _filter_positions(self, positions: list[Position]) -> list[Position]:
+        return [p for p in positions if p.symbol.startswith("hyna:")]
+
+    async def _place_order(self, symbol: str, *args, **kwargs):
+        if not symbol.startswith("hyna:"):
+            raise ValueError(f"HyenaClient only trades hyna: symbols, got {symbol!r}")
+        return await super()._place_order(symbol, *args, **kwargs)
 
     # MARK: Account
 

@@ -1,5 +1,7 @@
-.PHONY: lint test update clean deploy stats stats-was stats-now
+.PHONY: prepare lint test update clean deploy stats stats-was stats-now
 p ?= all
+
+prepare: lint test
 
 lint:
 	uv run ruff format .

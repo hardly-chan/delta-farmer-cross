@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from lib import utils
 from lib.decorators import bind_log_context
 from lib.http import ApiError, AsyncHttp
-from strategy import ProfileInfo, TradingClient
+from strategy import Position, ProfileInfo, TradingClient
 
 from .hyperliquid import HyperLiquidClient
 
@@ -64,6 +64,11 @@ class OnyxClient(HyperLiquidClient):
     exchange = "onyx"
     dex_prefix = ""
     _builder = _ONYX_BUILDER
+    _symbols: list[str] = []
+
+    def _filter_positions(self, positions: list[Position]) -> list[Position]:
+        explicit = {s for s in self._symbols if s.startswith("hyna:")}
+        return [p for p in positions if not p.symbol.startswith("hyna:") or p.symbol in explicit]
 
     @classmethod
     def __type_check(cls) -> Type[TradingClient]:

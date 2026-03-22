@@ -67,7 +67,7 @@ def ttl_cache(ttl: int):
 
             return cache[key]
 
-        return async_wrapper if asyncio.iscoroutinefunction(func) else sync_wrapper
+        return async_wrapper if inspect.iscoroutinefunction(func) else sync_wrapper
 
     return decorator
 

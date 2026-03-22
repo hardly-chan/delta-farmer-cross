@@ -17,6 +17,10 @@ GENESIS = datetime(2025, 12, 4, tzinfo=timezone.utc)
 to_week = partial(to_period_week, genesis=GENESIS)
 
 
+def _normalize_symbols(symbols: list[str]) -> list[str]:
+    return [s if ":" in s else f"hyna:{s}" for s in symbols]
+
+
 # MARK: Reports
 
 
@@ -110,6 +114,7 @@ async def print_stats(accs: list[HyenaClient], period: str = "week", filter_peri
 async def main():
     cli = await create_cli("hyena", "configs/hyena.toml", ["privkey"])
     cfg = StrategyConfig.load(cli.config)
+    cfg.symbols = _normalize_symbols(cfg.symbols)
 
     accs = [(HyenaClient.from_config(x), x.enabled) for x in cfg.accounts]
     all_accs, act_accs = [c for c, _ in accs], [c for c, e in accs if e]

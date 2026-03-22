@@ -289,7 +289,11 @@ class HyperLiquidClient:
                         unrealized_pnl=Decimal(str(p.get("unrealizedPnl", 0))),
                     )
                 )
-        return result
+        return self._filter_positions(result)
+
+    def _filter_positions(self, positions: list[Position]) -> list[Position]:
+        """Return positions owned by this client. Override in subclasses to scope by DEX."""
+        return positions
 
     async def close_position(self, position: Position) -> bool:
         close_side: Side = "ask" if position.side == "bid" else "bid"

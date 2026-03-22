@@ -55,6 +55,8 @@ async def main():
 
     accs = [(OnyxClient.from_config(x), x.enabled) for x in cfg.accounts]
     all_accs, act_accs = [c for c, _ in accs], [c for c, e in accs if e]
+    for c in act_accs:
+        c._symbols = cfg.symbols
 
     match cli.command:
         case "info":

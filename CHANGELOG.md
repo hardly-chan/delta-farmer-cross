@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.5.1 — 2026-03-22
+
+### Fixes
+
+- Hyena and Onyx no longer pick up positions from unrelated DEXs sharing the same underlying HL account
+- Hyena: bare symbols like `BTC` are now automatically prefixed with `hyna:` — no config change needed
+
+[v0.5.0...v0.5.1](https://github.com/vladkens/delta-farmer/compare/v0.5.0...v0.5.1)
+
+---
+
 ## v0.5.0 — 2026-03-21
 
 ### New
