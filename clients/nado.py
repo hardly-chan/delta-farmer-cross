@@ -19,6 +19,9 @@ from strategy import Order, OrderStatus, Position, ProfileInfo, Side, TradingCli
 
 APP_URL = "https://app.nado.xyz"
 
+USDT_PID = 0  # Nado uses product_id=0 for USDT spot balance and fees
+USDC_PID = 5  # USDC spot balance (if any) and fee rebates for isolated margin
+
 # Error codes that map to NotFoundError instead of ApiError
 # https://docs.nado.xyz/developer-resources/api/errors
 _NOT_FOUND_CODES = frozenset(
@@ -280,10 +283,15 @@ class NadoClient:
     @ttl_cache(5)
     async def balance(self) -> Decimal:
         res = await self._query({"type": "subaccount_info", "subaccount": self.sender})
-        for b in res.get("spot_balances", []):
-            if b["product_id"] == 0:
-                return _from_x18(b["balance"]["amount"])
-        return Decimal(0)
+        spot = res.get("spot_balances", [])
+        perp = res.get("perp_balances", [])
+
+        spots = [x["balance"]["amount"] for x in spot if x["product_id"] in (USDT_PID, USDC_PID)]
+        perps = [x["balance"].get("v_quote_balance", "0") for x in perp]
+
+        spot_total = sum((_from_x18(x) for x in spots), Decimal(0))
+        perp_total = sum((_from_x18(x) for x in perps), Decimal(0))
+        return spot_total + perp_total
 
     @ttl_cache(3600)
     async def _taker_fee_rate(self, product_id: int) -> Decimal:
@@ -328,17 +336,27 @@ class NadoClient:
         isolated = sym.isolated_only
         isolated_margin_x6 = 0
         if isolated and not reduce_only:
-            leverage = self._leverage.get(symbol, 1)
             fee_rate = await self._taker_fee_rate(sym.product_id)
-            fee = notional * fee_rate
-            mid = await self.get_price(symbol)
-            oracle_notional = qty * mid
-            lev = Decimal(leverage)
-            if side == "bid":  # long: fill at ask ≥ oracle
-                margin_min = notional - oracle_notional * (1 - 1 / lev)
-            else:  # short: fill at bid ≤ oracle, needs extra margin
-                margin_min = oracle_notional * (1 + 1 / lev) - notional
-            isolated_margin_x6 = _to_x6(margin_min * Decimal("1.01") + fee)
+            lev = Decimal(self._leverage.get(symbol, 1))
+
+            # Worst-case fill price for margin sizing:
+            # Bid (long): sweeps book down → average fill ≤ order price → order price is the ceiling
+            # Ask (short): sweeps book up → average fill ≥ order price → add 1% slippage buffer
+            bid, ask = await self.get_bbo(symbol)
+            mid = bid if side == "bid" else ask
+            slp = Decimal("1.01") if side == "ask" else Decimal("1.00")
+            prc = max(price, mid) * slp
+
+            margin_notional = qty * prc
+            margin_fee = margin_notional * fee_rate
+            margin_min = margin_notional / lev + margin_fee
+
+            logger.debug(
+                f"{side=} {qty=:.3f} {price=:.2f} / {mid=:.2f} -> {margin_min=:.2f} "
+                f"({lev=:.0f} {prc=:.2f} {margin_fee=:.2f})"
+            )
+
+            isolated_margin_x6 = _to_x6(margin_min)
 
         appendix = _build_appendix(
             order_type=order_type,
@@ -481,11 +499,12 @@ class NadoClient:
     # MARK: Positions
 
     async def _positions_cross(self) -> list[Position]:
-        items = await self._query({"type": "subaccount_info", "subaccount": self.sender})
-        items = items.get("perp_balances", [])
+        payload = await self._query({"type": "subaccount_info", "subaccount": self.sender})
+        balances = payload.get("perp_balances", [])
+        products = payload.get("perp_products", [])
 
         rs: list[Position] = []
-        for b in items:
+        for b in balances:
             amount = _from_x18(b["balance"]["amount"])
             if amount == 0:
                 continue
@@ -496,7 +515,7 @@ class NadoClient:
             entry_price = abs(vquote / amount) if amount != 0 else Decimal(0)
 
             oracle_price = Decimal(0)
-            for p in items.get("perp_products", []):
+            for p in products:
                 if p.get("product_id") == b["product_id"]:
                     oracle_price = _from_x18(p.get("oracle_price_x18", "0"))
                     break
