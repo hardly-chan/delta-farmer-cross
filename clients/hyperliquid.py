@@ -3,6 +3,7 @@
 import asyncio
 import struct
 import time
+from datetime import datetime
 from decimal import Decimal
 from math import floor, log10
 from typing import Any, NoReturn, Self, Type
@@ -98,6 +99,29 @@ class HyperLiquidClient:
         if not rep.ok:
             raise ApiError("Info error", rep)
         return rep.json()
+
+    async def fetch_fills(self, since: datetime | None = None) -> list[dict]:
+        """Fetch all fills via userFillsByTime (paginated). Filtered by dex_prefix:
+        non-empty prefix → only fills with matching 'dex:' coin prefix;
+        empty prefix → only native HL fills (no ':' in coin)."""
+
+        start_ms = int(since.timestamp() * 1000) if since else 0
+        all_fills: list[dict] = []
+        while True:
+            page: list[dict] = await self._info(
+                type="userFillsByTime",
+                user=self.address,
+                startTime=start_ms,
+                aggregateByTime=True,
+            )
+            all_fills.extend(page)
+            if len(page) < 2000:
+                break
+            start_ms = page[-1]["time"] + 1
+
+        if self.dex_prefix:
+            return [f for f in all_fills if f["coin"].startswith(f"{self.dex_prefix}:")]
+        return [f for f in all_fills if ":" not in f["coin"]]
 
     def _sign_l1_action(self, action: dict, nonce: int) -> dict:
         data: bytes = msgpack.packb(action, use_bin_type=True)  # type: ignore[assignment]

@@ -8,6 +8,7 @@ from functools import partial
 
 from clients.hyena import HyenaClient
 from lib.cli import create_cli, run_app
+from lib.store import DataStore
 from lib.table import AutoTable, Column, PeriodRow, render_stats
 from lib.utils import gather_accs, parse_filter, short_addr, to_period_week
 from strategy import StrategyConfig
@@ -50,15 +51,19 @@ async def print_info(accs: list[HyenaClient]):
     tbl.print()
 
 
-async def _fetch_fills(acc: HyenaClient) -> list[dict]:
-    pld = {"type": "userFills", "user": acc.address, "aggregateByTime": True}
-    rep = await acc.http.request("POST", "/info", json=pld)
-    return rep.json() if rep.ok else []
+async def sync_fills(acc: HyenaClient, ttl: int) -> list[dict]:
+    store_path = f".cache/hyena_{short_addr(acc.address)}_fills.pkl"
+    store = DataStore(store_path, id_key="hash")
+    await store.sync(acc.fetch_fills, ttl_sec=ttl)
+    return store.get_all()
 
 
-async def print_stats(accs: list[HyenaClient], period: str = "week", filter_period: str = "all"):
+async def print_stats(
+    accs: list[HyenaClient], period: str = "week", filter_period: str = "all", force: bool = False
+):
+    ttl = 0 if force else 3600
     fills_list, rewards_list = await asyncio.gather(
-        gather_accs(accs, _fetch_fills),
+        gather_accs(accs, lambda acc: sync_fills(acc, ttl)),
         gather_accs(accs, lambda acc: acc.rewards()),
     )
 
@@ -67,8 +72,6 @@ async def print_stats(accs: list[HyenaClient], period: str = "week", filter_peri
 
     for acc, fills in zip(accs, fills_list):
         for fill in fills:
-            if not fill["coin"].startswith("hyna:"):
-                continue
             dt = datetime.fromtimestamp(fill["time"] / 1000, tz=timezone.utc)
             gtrades[to_week(dt)][acc.name].append(fill)
 
@@ -116,7 +119,7 @@ async def main():
         case "positions":
             await print_positions(act_accs)
         case "stats":
-            await print_stats(all_accs, period=cli.group, filter_period=cli.filter)
+            await print_stats(all_accs, period=cli.group, filter_period=cli.filter, force=cli.force)
         case "close":
             await close_all(act_accs)
         case "trade":
