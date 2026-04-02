@@ -17,6 +17,7 @@ from lib.models import AccountConfig
 from strategy import Order, OrderStatus, Position, ProfileInfo, Side, TradingClient
 
 APP_URL = "https://app.nado.xyz"
+_ISOLATED_MARGIN_BUFFER = Decimal("1.02")
 
 USDT_PID = 0  # Nado uses product_id=0 for USDT spot balance and fees
 USDC_PID = 5  # USDC spot balance (if any) and fee rebates for isolated margin
@@ -172,7 +173,7 @@ class NadoClient:
     async def _execute(self, pld: dict) -> dict:
         rep = await self.http.request("POST", "/v1/execute", json=pld)
         if not rep.ok or rep.json().get("status") != "success":
-            raise ApiError("Execute error", rep)
+            raise ApiError(f"[{self.name}] Execute error", rep)
 
         return rep.json().get("data", {})
 
@@ -187,6 +188,11 @@ class NadoClient:
     async def endpoint_addr(self) -> str:
         res = await self._query({"type": "contracts"})
         return res["endpoint_addr"]
+
+    @ttl_cache(300)
+    async def _all_products_raw(self) -> dict[int, Any]:
+        res = await self._query({"type": "all_products"})
+        return {p["product_id"]: p for p in res.get("perp_products", [])}
 
     def _sign(self, primary_type: str, verifying_contract: str, message: dict[str, Any]) -> str:
         msg = {
@@ -281,16 +287,9 @@ class NadoClient:
 
     @ttl_cache(5)
     async def balance(self) -> Decimal:
+        # Use healths[0].health (assets × oracle price − open positions)
         res = await self._query({"type": "subaccount_info", "subaccount": self.sender})
-        spot = res.get("spot_balances", [])
-        perp = res.get("perp_balances", [])
-
-        spots = [x["balance"]["amount"] for x in spot if x["product_id"] in (USDT_PID, USDC_PID)]
-        perps = [x["balance"].get("v_quote_balance", "0") for x in perp]
-
-        spot_total = sum((_from_x18(x) for x in spots), Decimal(0))
-        perp_total = sum((_from_x18(x) for x in perps), Decimal(0))
-        return spot_total + perp_total
+        return _from_x18(res["healths"][0]["health"])
 
     @ttl_cache(3600)
     async def _taker_fee_rate(self, product_id: int) -> Decimal:
@@ -341,21 +340,34 @@ class NadoClient:
             # Worst-case fill price for margin sizing:
             # Bid (long): sweeps book down → average fill ≤ order price → order price is the ceiling
             # Ask (short): sweeps book up → average fill ≥ order price → add 1% slippage buffer
+            # Oracle price is used as a floor — exchange health uses oracle for margin calculations.
+            # https://docs.nado.xyz/subaccounts-and-health
             bid, ask = await self.get_bbo(symbol)
             mid = bid if side == "bid" else ask
+
+            p = (await self._all_products_raw()).get(sym.product_id, {})
+            oracle = _from_x18(p.get("oracle_price_x18", "0"))
+            risk = p.get("risk", {})
+
             slp = Decimal("1.01") if side == "ask" else Decimal("1.00")
-            prc = max(price, mid) * slp
+            prc = max(price, mid, oracle) * slp
 
             margin_notional = qty * prc
             margin_fee = margin_notional * fee_rate
             margin_min = margin_notional / lev + margin_fee
+            margin_buf = margin_min * _ISOLATED_MARGIN_BUFFER
+            eff_lev = (margin_notional / margin_buf) if margin_buf else 0
+            long_w = _from_x18(risk.get("long_weight_initial_x18", "0"))
+            short_w = _from_x18(risk.get("short_weight_initial_x18", "0"))
 
             logger.debug(
-                f"{side=} {qty=:.3f} {price=:.2f} / {mid=:.2f} -> {margin_min=:.2f} "
-                f"({lev=:.0f} {prc=:.2f} {margin_fee=:.2f})"
+                f"{side} {qty:.3f} ord={price:.2f} book={mid:.2f} "
+                f"m={margin_buf:.2f} lev={eff_lev:.2f}x/{int(lev)}x "
+                f"rsk={prc:.2f} fee={margin_fee:.2f} "
+                f"[oracle={oracle:.2f} lw={long_w:.2f} sw={short_w:.2f}]"
             )
 
-            isolated_margin_x6 = _to_x6(margin_min)
+            isolated_margin_x6 = _to_x6(margin_buf)
 
         appendix = _build_appendix(
             order_type=order_type,
