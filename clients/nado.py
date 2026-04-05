@@ -337,11 +337,11 @@ class NadoClient:
             fee_rate = await self._taker_fee_rate(sym.product_id)
             lev = Decimal(self._leverage.get(symbol, 1))
 
-            # Worst-case fill price for margin sizing:
             # Bid (long): sweeps book down → average fill ≤ order price → order price is the ceiling
             # Ask (short): sweeps book up → average fill ≥ order price → add 1% slippage buffer
             # Oracle price is used as a floor — exchange health uses oracle for margin calculations.
             # https://docs.nado.xyz/subaccounts-and-health
+            # IMPORTANT: Docs have errors here in practice; do not rely on them for rewrites.
             bid, ask = await self.get_bbo(symbol)
             mid = bid if side == "bid" else ask
 
@@ -350,21 +350,20 @@ class NadoClient:
             risk = p.get("risk", {})
 
             slp = Decimal("1.01") if side == "ask" else Decimal("1.00")
-            prc = max(price, mid, oracle) * slp
-
+            prc = max(price, mid, oracle)
             margin_notional = qty * prc
             margin_fee = margin_notional * fee_rate
             margin_min = margin_notional / lev + margin_fee
-            margin_buf = margin_min * _ISOLATED_MARGIN_BUFFER
+            margin_buf = margin_min * _ISOLATED_MARGIN_BUFFER * slp
             eff_lev = (margin_notional / margin_buf) if margin_buf else 0
-            long_w = _from_x18(risk.get("long_weight_initial_x18", "0"))
-            short_w = _from_x18(risk.get("short_weight_initial_x18", "0"))
+            lw = _from_x18(risk.get("long_weight_initial_x18", "0"))
+            sw = _from_x18(risk.get("short_weight_initial_x18", "0"))
 
             logger.debug(
                 f"{side} {qty:.3f} ord={price:.2f} book={mid:.2f} "
                 f"m={margin_buf:.2f} lev={eff_lev:.2f}x/{int(lev)}x "
                 f"rsk={prc:.2f} fee={margin_fee:.2f} "
-                f"[oracle={oracle:.2f} lw={long_w:.2f} sw={short_w:.2f}]"
+                f"[oracle={oracle:.2f} lw={lw:.2f} sw={sw:.2f}]"
             )
 
             isolated_margin_x6 = _to_x6(margin_buf)

@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.6.1 – 2026-04-05
+
+### Fixes
+
+- Fixed Nado balance to include all spot assets (stables, NLP, etc) instead of only partial balances
+- Fixed Nado PnL reporting using mismatched account lists before and after the trade
+- Increased Nado isolated margin buffer to prevent undercollateralised orders
+
+### Improvements
+
+- Resting limit orders are now kept alive while BBO remains stable instead of being replaced
+- Added exponential backoff on cycle failure with a configurable `max_failures` option to restore previous behaviour
+- Improved private key error messages to be human-readable
+
+**Full Changelog**: https://github.com/vladkens/delta-farmer/compare/v0.6.0...v0.6.1
+
+---
+
 ## v0.6.0 — 2026-03-29
 
 ### New
