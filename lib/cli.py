@@ -62,6 +62,27 @@ def cli_anyarg(
     _apply(parser, is_root=True)
 
 
+def _git_hash(repo: str) -> str | None:
+    try:
+        cmd = ["git", "rev-parse", "--short", "HEAD"]
+        return subprocess.check_output(cmd, cwd=repo, stderr=subprocess.DEVNULL).decode().strip()
+    except Exception:
+        return None
+
+
+def _git_tag(repo: str) -> bool:
+    # returns non-zero (CalledProcessError) if HEAD is not exactly on a tag
+    try:
+        subprocess.check_output(
+            ["git", "describe", "--exact-match", "--tags", "HEAD"],
+            cwd=repo,
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    except Exception:
+        return False
+
+
 def _get_version() -> tuple[str, bool]:
     try:
         pyproject = os.path.join(os.path.dirname(__file__), "..", "pyproject.toml")
@@ -72,22 +93,10 @@ def _get_version() -> tuple[str, bool]:
             return "", True
 
         repo = os.path.join(os.path.dirname(__file__), "..")
-        try:
-            subprocess.check_output(
-                ["git", "describe", "--exact-match", "--tags", "HEAD"],
-                cwd=repo,
-                stderr=subprocess.DEVNULL,
-            )
+        if _git_tag(repo):
             return f"v{version} ", True
-        except subprocess.CalledProcessError:
-            short = (
-                subprocess.check_output(
-                    ["git", "rev-parse", "--short", "HEAD"], cwd=repo, stderr=subprocess.DEVNULL
-                )
-                .decode()
-                .strip()
-            )
-            return f"v{version}-{short} ", False
+        short = _git_hash(repo)
+        return (f"v{version}-{short} ", False) if short else (f"v{version} ", True)
     except Exception:
         return "", True
 

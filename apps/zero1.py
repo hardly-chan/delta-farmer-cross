@@ -44,13 +44,7 @@ async def _fetch_stats(acc: ZeroOneClient, ttl: int) -> dict:
     )
 
     # todo: trade object don't have historical fee, try to emulate it with "current fee"
-    tr, mr = await asyncio.gather(
-        acc.http.request("GET", f"/market/0/fees/taker/{acc_id}"),
-        acc.http.request("GET", f"/market/0/fees/maker/{acc_id}"),
-    )
-
-    tr = Decimal(str(tr.json())) if tr.ok else Decimal("0.00035")
-    mr = Decimal(str(mr.json())) if mr.ok else Decimal("0.0001")
+    tr, mr = await acc.get_fee_rates()
 
     for t in maker:
         t["fee"] = Decimal(str(t["price"])) * Decimal(str(t["baseSize"])) * mr
@@ -82,8 +76,8 @@ async def print_info(accs: list[ZeroOneClient]):
         p = await acc.profile() if await acc.registered() else None
         a = short_addr(acc.address)
         if not p:
-            return ("✗", acc.name, a, "", 0, 0, 0, "")
-        return ("✓", acc.name, a, p.volume, -p.pnl, p.points, p.balance, p.rank or "")
+            return ("✗", acc.name, a, None, None, None, None, None)
+        return ("✓", acc.name, a, p.volume, -p.pnl, p.points, p.balance, p.rank)
 
     for r in await gather_accs(accs, row):
         tbl.add_row(*r)

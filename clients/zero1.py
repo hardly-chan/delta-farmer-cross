@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import json
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -45,8 +46,56 @@ TURNKEY_AUTHPROXY_CONFIG_ID = "5ded06a7-4de9-40ba-8574-8716f865cb02"
 
 ZERO1_APP = "https://01.xyz"
 ZERO1_GENESIS = datetime(2026, 2, 3, tzinfo=timezone.utc)  # week 1 start (Tuesday)
-_POINTS_AUTH_ACTION = "40b744e1ca27621017264202a7958cb1b7b2dd7995"
-_POINTS_DEPLOYMENT_ID = "dpl_9cN1YHKTLJ4EkJ1SoxaV9ns7pT88"
+
+# NEXT_DPL = "dpl_9aUVF3dnWzSVmzyniboKPq4vBShx"
+# AUTH_ACT = "40e13f708d15eda73b64347a61f6654787ff509793"
+
+NEXT_DPL = "dpl_9aUVF3dnWzSVmzyniboKPq4vBShx__"
+AUTH_ACT = "40e13f708d15eda73b64347a61f6654787ff509793__"
+
+_POINTS_META_LOCK = asyncio.Lock()
+_POINTS_META_CACHE = ".cache/zero1_points_meta.json"
+
+
+async def _get_points_meta(
+    http: AsyncHttp, fresh: bool = False, stale_act: str | None = None
+) -> tuple[str, str]:
+    """Returns (action_hash, deployment_id). Pure — no side effects."""
+    if not fresh:
+        d = utils.json_load(_POINTS_META_CACHE)
+        if d:
+            return d["act"], d["dpl"]
+        return AUTH_ACT, NEXT_DPL
+
+    async with _POINTS_META_LOCK:
+        # double-check: another client may have already refreshed while we waited on the lock
+        d = utils.json_load(_POINTS_META_CACHE)
+        if d and d.get("act") != stale_act:
+            return d["act"], d["dpl"]
+
+        logger.info("Points meta stale, discovering fresh values...")
+        # discover: RSC fetch → chunk scan → find createToken action hash
+        rsc_hdr = {
+            "RSC": "1",
+            "Next-Router-State-Tree": "%5B%22%22%2C%7B%7D%2Cnull%2Cnull%2Ctrue%5D",
+        }
+        rsc = await http.request("GET", f"{ZERO1_APP}/points", headers=rsc_hdr)
+        dpl_m = re.search(r"dpl=(dpl_[A-Za-z0-9]+)", rsc.text)
+        dpl = dpl_m.group(1) if dpl_m else NEXT_DPL
+        chunks = list(dict.fromkeys(re.findall(r'"(/_next/static/chunks/[^"?]+\.js)', rsc.text)))
+        for c in chunks:
+            r = await http.request("GET", f"{ZERO1_APP}{c}?dpl={dpl}")
+            m = re.search(
+                r'createServerReference\)\("([0-9a-f]{40,42})"[^"]*"createToken"\)', r.text
+            )
+            if m:
+                act = m.group(1)
+                utils.json_dump(_POINTS_META_CACHE, {"act": act, "dpl": dpl})
+                logger.info(f"Points meta updated: AUTH_ACT={act!r} NEXT_DPL={dpl!r}")
+                return act, dpl
+
+        logger.warning("Points meta discovery failed, using fallback")
+        return AUTH_ACT, NEXT_DPL
 
 
 # MARK: Protobuf codec (minimal, hand-rolled for Nord actions)
@@ -450,16 +499,14 @@ class ZeroOneClient:
 
         while True:
             params = {"pageSize": str(page_size)}
-            if since:
+            if since and not cursor:
                 params["since"] = since.isoformat(timespec="milliseconds").replace("+00:00", "Z")
             if cursor:
-                params["startExclusive"] = cursor
+                params["startInclusive"] = cursor
 
             rep = await self.http.request("GET", path, params=params)
             if not rep.ok:
-                logger.warning(
-                    f"Paged request failed: {path} {params} {rep.status_code} {rep.text}"
-                )
+                logger.warning(f"Paged req failed: {path} {params} {rep.status_code} {rep.text}")
                 break
 
             data = rep.json()
@@ -475,7 +522,9 @@ class ZeroOneClient:
             assert len(values) > 0, f"No ID fields found in record: {r}"
             r["uid"] = utils.sha256("-".join(values))
 
-        return records
+        rs = {r["uid"]: r for r in records}.values()  # dedupe by uid
+        rs = sorted(rs, key=lambda r: r.get("time", 0))  # sort by time
+        return rs
 
     # MARK: Account
 
@@ -486,6 +535,18 @@ class ZeroOneClient:
             if bal["token"] == "USDC":
                 return Decimal(str(bal["amount"]))
         return Decimal(0)
+
+    @ttl_cache(3600)
+    async def get_fee_rates(self) -> tuple[Decimal, Decimal]:
+        _, acc_id = await self._ensure_session()
+        try:
+            tr, mr = await asyncio.gather(
+                self._call("GET", f"/market/0/fees/taker/{acc_id}"),
+                self._call("GET", f"/market/0/fees/maker/{acc_id}"),
+            )
+            return Decimal(str(tr)), Decimal(str(mr))
+        except Exception:
+            return Decimal("0.00035"), Decimal("0.0001")
 
     async def get_leverage(self, symbol: str) -> int | None:
         return None  # Nord uses risk-based margin; leverage on 01.xyz is frontend-only
@@ -699,19 +760,38 @@ class ZeroOneClient:
     @ttl_cache(86400)
     async def _ensure_points_auth(self, solana_addr: str, acc_id: int) -> None:
         await ensure_unwaf(self.http, f"{ZERO1_APP}/")
-        hdr = {"next-action": _POINTS_AUTH_ACTION, "x-deployment-id": _POINTS_DEPLOYMENT_ID}
+
+        # NOTE: When auto-discovery breaks, do this manually:
+        # 1. Open DevTools > Application > "Clear site data" > Reload page
+        # 2. Login, filter network: "has-response-header:set-cookie domain:01.xyz"
+        # 3. Copy header values into AUTH_ACT / NEXT_DPL above, delete _POINTS_META_CACHE
+
+        act, dpl = await _get_points_meta(self.http)
         pld = {"address": solana_addr, "accountId": acc_id, "network": "mainnet", "sessionId": None}
-        await self.http.request("POST", f"{ZERO1_APP}/points", json=[pld], headers=hdr)
+        hdr = {"next-action": act, "x-deployment-id": dpl}
+        rep = await self.http.request("POST", f"{ZERO1_APP}/points", json=[pld], headers=hdr)
+
+        if rep.status_code == 404 and rep.headers.get("x-nextjs-action-not-found"):
+            act, dpl = await _get_points_meta(self.http, fresh=True, stale_act=act)
+            hdr = {"next-action": act, "x-deployment-id": dpl}
+            rep = await self.http.request("POST", f"{ZERO1_APP}/points", json=[pld], headers=hdr)
+
+        cname = f"01session_{solana_addr}_mainnet"
+        if cname not in self.http.session.cookies:
+            logger.warning(f"Points auth cookie not found ({rep.status_code})")
 
     async def _fetch_points(self, solana_addr: str, acc_id: int) -> dict:
         await self._ensure_points_auth(solana_addr, acc_id)
         url = f"{ZERO1_APP}/api/points?walletAddress={solana_addr}"
         rep = await self.http.request("GET", url)
+        if rep.status_code != 200:
+            logger.warning(f"Failed to fetch points: {rep.status_code} {rep.text}")
+
         return rep.json()
 
     async def _points(self, solana_addr: str, acc_id: int) -> tuple[Decimal, int | None]:
         data = await self._fetch_points(solana_addr, acc_id)
-        lb = data.get("leaderboardData", {})
+        lb = data.get("leaderboardData", {}) or {}
         return Decimal(str(lb.get("points", 0))), lb.get("rank")
 
     async def points_history(self) -> list[ZeroOnePoint]:
