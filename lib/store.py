@@ -1,7 +1,8 @@
 # delta-farmer | https://github.com/vladkens/delta-farmer
 # Copyright (c) vladkens | MIT License | Crafted with love and ctrl+c
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
-from typing import Awaitable, Callable, Generic, Type, TypeVar, cast
+from typing import TypeVar, cast
 
 from pydantic import BaseModel
 
@@ -12,8 +13,8 @@ T = TypeVar("T")
 FetchFn = Callable[[datetime | None], Awaitable[list[T]]]
 
 
-class DataStore(Generic[T]):
-    def __init__(self, filepath: str, id_key: str = "id", model: Type[T] | None = None):
+class DataStore[T]:
+    def __init__(self, filepath: str, id_key: str = "id", model: type[T] | None = None):
         self.filepath = filepath
         self.last_dt: datetime | None = None
         self.records: dict[str, T] = {}
@@ -54,7 +55,7 @@ class DataStore(Generic[T]):
                     if isinstance(record, BaseModel)
                     else cast(dict, record)[self.id_key]
                 )
-            except KeyError, AttributeError:
+            except (KeyError, AttributeError):
                 logger.error(f"Record is missing id_key '{self.id_key}': {record}")
                 raise
             self.records[key] = record

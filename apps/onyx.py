@@ -1,7 +1,7 @@
 # delta-farmer | https://github.com/vladkens/delta-farmer
 # Copyright (c) vladkens | MIT License | Built by humans, blamed on AI
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from functools import partial
 from typing import TypeVar
@@ -17,7 +17,7 @@ from strategy.runner import close_all, print_positions, run_groups
 T = TypeVar("T")
 DD = defaultdict[str, defaultdict[str, T]]
 
-GENESIS = datetime(2026, 3, 1, tzinfo=timezone.utc)
+GENESIS = datetime(2026, 3, 1, tzinfo=UTC)
 to_week = partial(to_period_week, genesis=GENESIS)
 
 
@@ -71,7 +71,7 @@ async def print_stats(
 
     for acc, fills in zip(accs, fills_list):
         for fill in fills:
-            dt = datetime.fromtimestamp(fill["time"] / 1000, tz=timezone.utc)
+            dt = datetime.fromtimestamp(fill["time"] / 1000, tz=UTC)
             if dt < GENESIS:
                 continue
             gtrades[period_fn(dt)][acc.name].append(fill)

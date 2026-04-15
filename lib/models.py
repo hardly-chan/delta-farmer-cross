@@ -1,7 +1,6 @@
 # delta-farmer | https://github.com/vladkens/delta-farmer
 # Copyright (c) vladkens | MIT License | Powered by caffeine and stackoverflow
 import random
-from typing import Generic, TypeVar
 
 from pydantic import (
     BaseModel,
@@ -15,8 +14,6 @@ from pydantic_core import core_schema
 
 from .crypto import decrypt_value, is_encrypted
 from .utils import parse_duration
-
-RangeT = TypeVar("RangeT", int, float)
 
 
 class DurationSec(int):
@@ -33,9 +30,9 @@ class DurationSec(int):
         return core_schema.no_info_after_validator_function(cls, core_schema.union_schema(t))
 
 
-class Range(BaseModel, Generic[RangeT]):
-    min: RangeT = Field(..., gt=0)
-    max: RangeT = Field(..., gt=0)
+class Range[T: (int, float)](BaseModel):
+    min: T = Field(..., gt=0)
+    max: T = Field(..., gt=0)
 
     @model_validator(mode="before")
     @classmethod

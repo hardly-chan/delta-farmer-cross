@@ -98,7 +98,7 @@ def is_encrypted(value: str) -> bool:
 def encrypt_toml_config(filepath: str, fields: list[str]):
     if not os.path.exists(filepath):
         raise SystemExit(f"❌ Config file not found: {filepath}")
-    with open(filepath, "r") as fp:
+    with open(filepath) as fp:
         data = fp.read()
 
     tlen, elen = 4, len(ENC_PREFIX) + 4
@@ -140,7 +140,7 @@ def encrypt_toml_config(filepath: str, fields: list[str]):
 def decrypt_toml_config(filepath: str, fields: list[str]):
     if not os.path.exists(filepath):
         raise SystemExit(f"❌ Config file not found: {filepath}")
-    with open(filepath, "r") as fp:
+    with open(filepath) as fp:
         data = fp.read()
 
     tlen, elen = 4, len(ENC_PREFIX) + 4

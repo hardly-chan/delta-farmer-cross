@@ -4,7 +4,7 @@ import asyncio
 import inspect
 import time
 from functools import wraps
-from typing import Protocol, Type, TypeVar
+from typing import Protocol
 
 from .logger import logger
 
@@ -80,10 +80,7 @@ class HasName(Protocol):
     def name(self) -> str: ...
 
 
-T = TypeVar("T", bound=HasName)
-
-
-def bind_log_context(cls: Type[T]) -> Type[T]:
+def bind_log_context[T: HasName](cls: type[T]) -> type[T]:
     for attr_name, attr in cls.__dict__.items():
         if attr_name.startswith("__") or not callable(attr) or isinstance(attr, staticmethod):
             continue

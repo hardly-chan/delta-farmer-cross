@@ -2,7 +2,7 @@
 # Copyright (c) vladkens | MIT License | Powered by caffeine and stackoverflow
 import asyncio
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TypeVar
 
@@ -15,7 +15,7 @@ from strategy import StrategyConfig
 from strategy.runner import close_all, print_positions, run_groups
 
 # https://docs.pacifica.fi/points-program
-GENESIS = datetime(2025, 9, 4, tzinfo=timezone.utc)
+GENESIS = datetime(2025, 9, 4, tzinfo=UTC)
 
 T = TypeVar("T")
 DD = defaultdict[str, defaultdict[str, T]]

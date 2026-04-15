@@ -3,9 +3,9 @@
 import asyncio
 import random
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any, Self, Type
+from typing import Any, Self
 
 from eth_account.messages import encode_typed_data
 from pydantic import BaseModel
@@ -140,7 +140,7 @@ class NadoClient:
     exchange = "nado"
 
     @classmethod
-    def __type_check(cls) -> Type[TradingClient]:
+    def __type_check(cls) -> type[TradingClient]:
         return NadoClient
 
     @classmethod
@@ -619,7 +619,7 @@ class NadoClient:
                     volume=abs(_from_x18(o["quote_filled"])),
                     fee=_from_x18(o["fee"]),
                     realized_pnl=_from_x18(o["realized_pnl"]),
-                    created_at=datetime.fromtimestamp(created_ms / 1000, tz=timezone.utc),
+                    created_at=datetime.fromtimestamp(created_ms / 1000, tz=UTC),
                 )
                 items[t.digest] = t
                 if since and t.created_at <= since:
@@ -635,8 +635,8 @@ class NadoClient:
             NadoPoint(
                 epoch=int(x["epoch"]),
                 description=x["description"],
-                since=datetime.fromtimestamp(int(x["start_time"]), tz=timezone.utc),
-                until=datetime.fromtimestamp(int(x["end_time"]), tz=timezone.utc),
+                since=datetime.fromtimestamp(int(x["start_time"]), tz=UTC),
+                until=datetime.fromtimestamp(int(x["end_time"]), tz=UTC),
                 points=_from_x18(x["points"]),
                 rank=int(x["rank"]),
                 tier=int(x["tier"]),

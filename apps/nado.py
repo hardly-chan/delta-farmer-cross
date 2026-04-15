@@ -2,7 +2,7 @@
 # Copyright (c) vladkens | MIT License | Refactoring is just future procrastination
 import asyncio
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import TypeVar
 
@@ -19,10 +19,10 @@ DD = defaultdict[str, defaultdict[str, T]]
 
 # Named epochs before weekly cadence kicked in (end = next entry's start or _W1_START)
 _NAMED_EPOCHS: list[tuple[str, datetime]] = [
-    ("ALP", datetime(2025, 11, 20, tzinfo=timezone.utc)),
-    ("OFF", datetime(2026, 1, 16, tzinfo=timezone.utc)),
+    ("ALP", datetime(2025, 11, 20, tzinfo=UTC)),
+    ("OFF", datetime(2026, 1, 16, tzinfo=UTC)),
 ]
-_W1_START = datetime(2026, 1, 30, tzinfo=timezone.utc)
+_W1_START = datetime(2026, 1, 30, tzinfo=UTC)
 
 
 def _period_label(dt: datetime) -> str:

@@ -2,7 +2,7 @@
 # Copyright (c) vladkens | MIT License | Built by humans, blamed on AI
 import asyncio
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from functools import partial
 from typing import TypeVar
@@ -18,7 +18,7 @@ from strategy.runner import close_all, print_positions, run_groups
 T = TypeVar("T")
 DD = defaultdict[str, defaultdict[str, T]]
 
-GENESIS = datetime(2025, 12, 4, tzinfo=timezone.utc)
+GENESIS = datetime(2025, 12, 4, tzinfo=UTC)
 to_week = partial(to_period_week, genesis=GENESIS)
 
 
@@ -97,7 +97,7 @@ async def print_stats(
 
     for acc, fills in zip(accs, fills_list):
         for fill in fills:
-            dt = datetime.fromtimestamp(fill["time"] / 1000, tz=timezone.utc)
+            dt = datetime.fromtimestamp(fill["time"] / 1000, tz=UTC)
             gtrades[to_week(dt)][acc.name].append(fill)
 
     for acc, rewards in zip(accs, rewards_list):

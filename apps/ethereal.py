@@ -2,7 +2,7 @@
 # Copyright (c) vladkens | MIT License | Crafted with love and ctrl+c
 import asyncio
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from functools import partial
 
@@ -14,7 +14,7 @@ from lib.utils import gather_accs, parse_filter, short_addr, to_period_day, to_p
 from strategy import StrategyConfig
 from strategy.runner import close_all, print_positions, run_groups
 
-GENESIS = datetime(2025, 12, 18, tzinfo=timezone.utc)
+GENESIS = datetime(2025, 12, 18, tzinfo=UTC)
 
 
 # MARK: Storages

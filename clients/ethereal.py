@@ -4,7 +4,7 @@ import asyncio
 import time
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Literal, Self, Type
+from typing import Any, Literal, Self
 
 from eth_account.messages import encode_typed_data
 from pydantic import BaseModel, ConfigDict, Field
@@ -102,7 +102,7 @@ class EtherealClient:
     exchange = "ethereal"
 
     @classmethod
-    def __type_check(cls) -> Type[TradingClient]:
+    def __type_check(cls) -> type[TradingClient]:
         return EtherealClient
 
     @classmethod

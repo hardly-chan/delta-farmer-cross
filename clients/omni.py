@@ -2,7 +2,7 @@
 # Copyright (c) vladkens | MIT License | If it compiles, ship it
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any, Self, Type
+from typing import Any, Self
 
 from eth_account.messages import encode_defunct
 from pydantic import AliasPath, BaseModel, ConfigDict, Field
@@ -71,7 +71,7 @@ class OmniClient:
     exchange = "omni"
 
     @classmethod
-    def __type_check(cls) -> Type[TradingClient]:
+    def __type_check(cls) -> type[TradingClient]:
         return OmniClient
 
     @classmethod

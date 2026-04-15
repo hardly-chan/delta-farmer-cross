@@ -4,12 +4,12 @@ import asyncio
 import hashlib
 
 from curl_cffi.requests import AsyncSession, Response, errors
-from curl_cffi.requests.session import HttpMethod  # noqa: F401
+from curl_cffi.requests.session import HttpMethod
 
 from .logger import logger
 from .utils import pickle_dump, pickle_load
 
-__all__ = ["ApiError", "NotFoundError", "AsyncHttp", "HttpMethod", "parse_proxy"]
+__all__ = ["ApiError", "AsyncHttp", "HttpMethod", "NotFoundError", "parse_proxy"]
 
 
 class ApiError(Exception):

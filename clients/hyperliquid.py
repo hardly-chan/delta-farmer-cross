@@ -6,7 +6,7 @@ import time
 from datetime import datetime
 from decimal import Decimal
 from math import floor, log10
-from typing import Any, NoReturn, Self, Type
+from typing import Any, NoReturn, Self
 
 import msgpack
 from eth_account.messages import encode_typed_data
@@ -61,8 +61,8 @@ class HyperLiquidClient:
     dex_prefix: str = ""
 
     @classmethod
-    def __type_check(cls) -> Type[TradingClient]:
-        return HyperLiquidClient  # type: ignore
+    def __type_check(cls) -> type[TradingClient]:
+        return HyperLiquidClient
 
     @classmethod
     def from_config(cls, cfg: AccountConfig) -> Self:

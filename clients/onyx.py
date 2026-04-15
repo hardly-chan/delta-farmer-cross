@@ -1,9 +1,8 @@
 # delta-farmer | https://github.com/vladkens/delta-farmer
 # Copyright (c) vladkens | MIT License | Built by humans, blamed on AI
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Type
 
 from eth_account.messages import encode_defunct
 from pydantic import BaseModel
@@ -63,14 +62,14 @@ class OnyxClient(HyperLiquidClient):
     exchange = "onyx"
     dex_prefix = ""
     _builder = _ONYX_BUILDER
-    _symbols: list[str] = []
+    _symbols: list[str] = []  # noqa: RUF012
 
     def _filter_positions(self, positions: list[Position]) -> list[Position]:
         explicit = {s for s in self._symbols if s.startswith("hyna:")}
         return [p for p in positions if not p.symbol.startswith("hyna:") or p.symbol in explicit]
 
     @classmethod
-    def __type_check(cls) -> Type[TradingClient]:
+    def __type_check(cls) -> type[TradingClient]:
         return OnyxClient
 
     def __init__(self, name: str, privkey: str, proxy: str | None = None):
@@ -90,7 +89,7 @@ class OnyxClient(HyperLiquidClient):
             raise ApiError("Privy nonce failed", rep)
         nonce = rep.json()["nonce"]
 
-        issued_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        issued_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.000Z")
         message = (
             f"app.onyx.live wants you to sign in with your Ethereum account:\n"
             f"{self.address}\n\n"

@@ -2,7 +2,7 @@
 # Copyright (c) vladkens | MIT License | No AI was harmed making this
 import asyncio
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from functools import partial
 
@@ -16,7 +16,7 @@ from strategy.runner import close_all, print_positions, run_groups
 
 # https://docs.variational.io/omni/rewards/points
 # https://omni.variational.io/points (UI counts from -1 week)
-GENESIS = datetime(2025, 12, 17 - 6, tzinfo=timezone.utc)
+GENESIS = datetime(2025, 12, 17 - 6, tzinfo=UTC)
 
 to_week_name = partial(to_period_week, genesis=GENESIS)
 

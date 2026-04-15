@@ -7,24 +7,21 @@ import os
 import pickle
 import random
 import re
-from datetime import datetime, timedelta, timezone
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Awaitable, Callable, TypeVar
 
 from filelock import FileLock
 
 from .errors import AppError
 from .logger import logger
 
-T = TypeVar("T")
-R = TypeVar("R")
 
-
-async def gather_accs(accs: list[T], fn: Callable[[T], Awaitable[R]]) -> list[R]:
+async def gather_accs[T, R](accs: list[T], fn: Callable[[T], Awaitable[R]]) -> list[R]:
     return list(await asyncio.gather(*(fn(acc) for acc in accs)))
 
 
-def first(items: list[T]) -> T | None:
+def first[T](items: list[T]) -> T | None:
     return items[0] if items else None
 
 
@@ -32,7 +29,7 @@ def pick(d: dict, *keys: str) -> dict:
     return {k: d[k] for k in keys if k in d}
 
 
-def shuffle(items: list[T]) -> list[T]:
+def shuffle[T](items: list[T]) -> list[T]:
     items = items.copy()
     random.shuffle(items)
     return items
@@ -76,7 +73,7 @@ def _week_date_range(week_start: datetime) -> str:
 
 def to_period_week(dt: datetime, genesis: datetime, prefix: str = "W") -> str:
     """Convert datetime to week period string like 'W01 Dec18-Dec24'."""
-    assert dt.tzinfo == timezone.utc, "to_period_week: dt must be in UTC timezone"
+    assert dt.tzinfo == UTC, "to_period_week: dt must be in UTC timezone"
     delta = dt - genesis
     index = delta.days // 7 + 1
     if index <= 0:
@@ -127,9 +124,8 @@ def parse_filter(filter_str: str, all_periods: list[str]) -> list[str]:
 def pickle_load(filepath: str, *, lock=False, delete_on_error=False):
     try:
         if lock:
-            with FileLock(f"{filepath}.lock", timeout=5):
-                with open(filepath, "rb") as fp:
-                    return pickle.load(fp)
+            with FileLock(f"{filepath}.lock", timeout=5), open(filepath, "rb") as fp:
+                return pickle.load(fp)
         else:
             with open(filepath, "rb") as fp:
                 return pickle.load(fp)
@@ -146,9 +142,8 @@ def pickle_dump(filepath: str, data: object, *, lock=False):
     try:
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         if lock:
-            with FileLock(f"{filepath}.lock", timeout=5):
-                with open(filepath, "wb") as fp:
-                    pickle.dump(data, fp)
+            with FileLock(f"{filepath}.lock", timeout=5), open(filepath, "wb") as fp:
+                pickle.dump(data, fp)
         else:
             with open(filepath, "wb") as fp:
                 pickle.dump(data, fp)
@@ -158,7 +153,7 @@ def pickle_dump(filepath: str, data: object, *, lock=False):
 
 def json_load(filepath: str):
     try:
-        with open(filepath, "r") as fp:
+        with open(filepath) as fp:
             return json.load(fp)
     except FileNotFoundError:
         return None
@@ -334,7 +329,7 @@ async def gather_cancel(tasks: list[asyncio.Task], timeout: float) -> None:
     """Gather tasks, canceling any that exceed the timeout."""
     try:
         await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning(f"Timeout ({timeout:.0f}s), canceling stuck tasks")
         for t in tasks:
             if not t.done():
@@ -354,5 +349,5 @@ async def interruptible_sleep(sec: float, stop_event: asyncio.Event | None = Non
     try:
         await asyncio.wait_for(stop_event.wait(), timeout=sec)
         raise asyncio.CancelledError
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pass  # completed normally

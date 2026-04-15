@@ -2,9 +2,10 @@
 # Copyright (c) vladkens | MIT License | May contain traces of genius
 import decimal
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Callable, cast
+from typing import cast
 
 from rich import print as console_print
 from rich.box import SIMPLE, Box
@@ -44,7 +45,7 @@ def _compute(col: Column, proxy: RowProxy):
         return _TBD
     try:
         return col.compute(proxy)
-    except ZeroDivisionError, decimal.InvalidOperation:
+    except (ZeroDivisionError, decimal.InvalidOperation):
         return None
     except Exception as e:
         logger.error(f"Error computing column '{col.name}' for row {proxy._row}: {e}")
@@ -198,7 +199,7 @@ def render_stats(
         Column(
             "$/100k",
             "${:,.2f}",
-            compute=lambda r: r["Burn"] / r["Volume"] * Decimal(1e5),
+            compute=lambda r: r["Burn"] / r["Volume"] * Decimal("1e5"),
             guard=lambda r: r["Volume"] >= min_vol,
         ),
     ]

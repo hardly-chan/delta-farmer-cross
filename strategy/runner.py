@@ -15,7 +15,7 @@ from lib import telemetry, utils
 from lib.errors import AppError
 from lib.logger import logger
 
-from .delta import DeltaStrategy
+from .cycle import DeltaStrategy
 from .models import Position, StrategyConfig, TradingClient
 
 

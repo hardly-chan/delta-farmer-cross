@@ -1,9 +1,8 @@
 # delta-farmer | https://github.com/vladkens/delta-farmer
 # Copyright (c) vladkens | MIT License | Built by humans, blamed on AI
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Type
 
 from eth_account.messages import encode_defunct
 from pydantic import BaseModel
@@ -65,7 +64,7 @@ class HyenaClient(HyperLiquidClient):
     dex_prefix = "hyna"
 
     @classmethod
-    def __type_check(cls) -> Type[TradingClient]:
+    def __type_check(cls) -> type[TradingClient]:
         return HyenaClient
 
     def __init__(self, name: str, privkey: str, proxy: str | None = None):
@@ -88,7 +87,7 @@ class HyenaClient(HyperLiquidClient):
             raise ApiError("Nonce failed", rep)
         nonce = rep.json()["nonce"]
 
-        issued_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        issued_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.000Z")
         message = (
             f"app.hyena.trade wants you to sign in with your Ethereum account:\n"
             f"{self.address}\n"

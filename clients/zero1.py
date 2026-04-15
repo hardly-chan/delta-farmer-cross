@@ -5,9 +5,9 @@ import base64
 import json
 import re
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Self, Type
+from typing import Self
 
 import base58
 from cryptography.hazmat.primitives.asymmetric.ec import (
@@ -45,7 +45,7 @@ TURNKEY_ORG_ID = "497f60f3-57cd-4aec-af39-7415c2fafaab"
 ZERO1_JANUS_LOGIN_PATH = "/api/janus/v1/auth/wallet/login"
 
 ZERO1_APP = "https://01.xyz"
-ZERO1_GENESIS = datetime(2026, 2, 3, tzinfo=timezone.utc)  # week 1 start (Tuesday)
+ZERO1_GENESIS = datetime(2026, 2, 3, tzinfo=UTC)  # week 1 start (Tuesday)
 
 # last know values. can be changed on next deployment, but code have auto-discovery fallback
 AUTH_ACT = "404455b12249fd9ec1aea6c44bf40eb0338e7cd9a2"
@@ -351,7 +351,7 @@ class ZeroOneClient:
     exchange = "zero1"
 
     @classmethod
-    def __type_check(cls) -> Type[TradingClient]:
+    def __type_check(cls) -> type[TradingClient]:
         return ZeroOneClient
 
     @classmethod

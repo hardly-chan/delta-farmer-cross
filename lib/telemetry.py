@@ -5,7 +5,7 @@ import functools
 import os
 import sys
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import curl_cffi as curl
 import machineid
@@ -92,6 +92,6 @@ def track(event: str, props: dict | None = None) -> None:
     if os.getenv("DF_TELEMETRY") == "0":
         return
 
-    ts = datetime.now(timezone.utc).isoformat()
+    ts = datetime.now(UTC).isoformat()
     props = {**_context, **(props or {})}
     _queue.append({"event": event, "distinct_id": _anon_id(), "timestamp": ts, "properties": props})

@@ -3,10 +3,9 @@
 import sys
 import tomllib
 import warnings
-from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
-from typing import Literal, Protocol, Type, TypeVar, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
@@ -141,23 +140,7 @@ def opposite_side(side: Side) -> Side:
     return "ask" if side == "bid" else "bid"
 
 
-# MARK: Trade plan
-
-
-@dataclass
-class TradeAction:
-    """Planned trade for one account."""
-
-    client: TradingClient
-    side: Side
-    size_usd: Decimal
-    qty: Decimal = Decimal(0)
-    order: Order | None = None
-
-
 # MARK: Strategy config
-
-ConfigT = TypeVar("ConfigT", bound=BaseModel)
 
 
 class StrategyConfig(BaseModel):
@@ -210,7 +193,7 @@ class StrategyConfig(BaseModel):
         return load_config(cls, filepath)
 
 
-def load_config(config_cls: Type[ConfigT], filepath: str) -> ConfigT:
+def load_config[T: BaseModel](config_cls: type[T], filepath: str) -> T:
     """Load and validate a Pydantic config from a TOML file with user-friendly errors."""
     try:
         with open(filepath, "rb") as fp:

@@ -5,7 +5,7 @@ import json
 import time
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Literal, Self, Type, cast
+from typing import Literal, Self, cast
 
 import base58
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
@@ -110,7 +110,7 @@ class PacificaClient:
     exchange = "pacifica"
 
     @classmethod
-    def __type_check(cls) -> Type[TradingClient]:
+    def __type_check(cls) -> type[TradingClient]:
         return PacificaClient
 
     @classmethod
@@ -159,7 +159,7 @@ class PacificaClient:
 
     async def registered(self) -> bool:
         try:
-            await self._call("GET", f"/account?account={str(self.keypair.pubkey())}")
+            await self._call("GET", f"/account?account={self.keypair.pubkey()!s}")
             return True
         except ApiError as e:
             if "account not found" in str(e).lower():
