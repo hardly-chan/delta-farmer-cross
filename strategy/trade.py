@@ -13,6 +13,7 @@ from .models import Position, Side, StrategyConfig, TradingClient, opposite_side
 USD_TICK = Decimal("0.01")
 SAFE_PCT = Decimal("0.96")  # leave 4% margin to avoid liquidation on leverage rounding
 SIZE_DRIFT_LIMIT = Decimal("0.05")
+QTY_IMBALANCE_WARN_USD = Decimal("0.10")
 
 
 async def _fill_limit_order(
@@ -146,6 +147,24 @@ class DeltaTrade:
         lot_size = await self.lead.client.get_lot_size(self.symbol)
         for leg in self.legs:
             leg.qty = usd_to_qty(leg.size_usd, price, lot_size)
+
+        bid_qty = sum(leg.qty for leg in self.legs if leg.side == "bid")
+        ask_qty = sum(leg.qty for leg in self.legs if leg.side == "ask")
+        delta = bid_qty - ask_qty  # positive → bid side is larger
+
+        if delta != 0:
+            larger_side = "bid" if delta > 0 else "ask"
+            last_leg = next(leg for leg in reversed(self.legs) if leg.side == larger_side)
+            usd_imbalance = abs(delta) * price
+            if abs(delta) >= last_leg.qty:
+                logger.warning(
+                    f"qty imbalance {delta} ({usd_imbalance:.2f} USD) >= "
+                    f"last leg qty {last_leg.qty} — skipping adjustment"
+                )
+            else:
+                last_leg.qty -= abs(delta)
+                if usd_imbalance > QTY_IMBALANCE_WARN_USD:
+                    logger.warning(f"qty imbalance adjusted: {delta} qty = {usd_imbalance:.2f} USD")
 
     async def log_plan(self) -> None:
         total_usd = sum(leg.size_usd for leg in self.legs)
