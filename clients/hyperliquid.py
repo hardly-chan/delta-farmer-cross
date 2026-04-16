@@ -18,7 +18,7 @@ from lib.decorators import bind_log_context, ttl_cache
 from lib.http import ApiError, AsyncHttp
 from lib.logger import logger
 from lib.models import AccountConfig
-from strategy import Order, OrderStatus, Position, ProfileInfo, Side, TradingClient
+from strategy import Order, OrderBook, OrderStatus, Position, ProfileInfo, Side, TradingClient
 
 HL_API = "https://api.hyperliquid.xyz"
 
@@ -239,6 +239,21 @@ class HyperLiquidClient:
         ctx = await self._asset_ctx(symbol)
         impact = ctx["impactPxs"]
         return Decimal(str(impact[0])), Decimal(str(impact[1]))
+
+    @ttl_cache(5)
+    async def get_order_book(self, symbol: str) -> OrderBook:
+        dex, coin = self._resolve(symbol)
+        rep = await self._info(type="l2Book", coin=coin, **({} if not dex else {"dex": dex}))
+        levels = rep
+        if isinstance(rep, dict):
+            levels = rep.get("levels") or rep.get("data", {}).get("levels")
+        if not isinstance(levels, list) or len(levels) < 2:
+            raise ApiError(f"Unexpected l2Book response for {symbol}: {rep}")
+
+        return OrderBook.build(
+            bids=[(x["px"], x["sz"]) for x in levels[0][:5]],
+            asks=[(x["px"], x["sz"]) for x in levels[1][:5]],
+        )
 
     async def get_price(self, symbol: str) -> Decimal:
         ctx = await self._asset_ctx(symbol)

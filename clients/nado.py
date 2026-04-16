@@ -14,7 +14,7 @@ from lib import logger, utils
 from lib.decorators import bind_log_context, retry, ttl_cache
 from lib.http import ApiError, AsyncHttp, NotFoundError
 from lib.models import AccountConfig
-from strategy import Order, OrderStatus, Position, ProfileInfo, Side, TradingClient
+from strategy import Order, OrderBook, OrderStatus, Position, ProfileInfo, Side, TradingClient
 
 APP_URL = "https://app.nado.xyz"
 _ISOLATED_MARGIN_BUFFER = Decimal("1.02")
@@ -236,7 +236,17 @@ class NadoClient:
         if not bids or not asks:
             raise ApiError(f"No orderbook data for {symbol}")
 
-        return Decimal(bids[0][0]), Decimal(asks[0][0])
+        return Decimal(str(bids[0][0])), Decimal(str(asks[0][0]))
+
+    @ttl_cache(5)
+    async def get_order_book(self, symbol: str) -> OrderBook:
+        pld = {"ticker_id": f"{symbol}-PERP_USDT0", "depth": 5}
+        rep = await self.http.request("GET", "/v2/orderbook", params=pld)
+        if not rep.ok:
+            raise ApiError(f"Orderbook error for {symbol}", rep)
+
+        data = rep.json()
+        return OrderBook.build(bids=data.get("bids", []), asks=data.get("asks", []))
 
     async def get_price(self, symbol: str) -> Decimal:
         bid, ask = await self.get_bbo(symbol)

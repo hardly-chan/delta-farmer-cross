@@ -3,6 +3,7 @@
 import sys
 import tomllib
 import warnings
+from collections.abc import Iterable
 from decimal import Decimal
 from enum import StrEnum
 from typing import Literal, Protocol, runtime_checkable
@@ -59,6 +60,30 @@ class ProfileInfo(BaseModel):
     rank: int | None = None
 
 
+class OrderBookLevel(BaseModel):
+    price: Decimal
+    size: Decimal
+
+    @classmethod
+    def build(cls, level: Iterable[object]) -> "OrderBookLevel":
+        price, size = level
+        return cls(price=Decimal(str(price)), size=Decimal(str(size)))
+
+
+class OrderBook(BaseModel):
+    bids: list[OrderBookLevel]
+    asks: list[OrderBookLevel]
+
+    @classmethod
+    def build(
+        cls, *, bids: Iterable[Iterable[object]], asks: Iterable[Iterable[object]]
+    ) -> "OrderBook":
+        return cls(
+            bids=[OrderBookLevel.build(level) for level in bids],
+            asks=[OrderBookLevel.build(level) for level in asks],
+        )
+
+
 # MARK: Protocol
 
 
@@ -79,6 +104,7 @@ class TradingClient(Protocol):
 
     # Price & conversion
     async def get_bbo(self, symbol: str) -> tuple[Decimal, Decimal]: ...  # (best_bid, best_ask)
+    async def get_order_book(self, symbol: str) -> OrderBook: ...
     async def get_price(self, symbol: str) -> Decimal: ...
 
     async def get_lot_size(self, symbol: str) -> Decimal:

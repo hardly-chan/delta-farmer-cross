@@ -32,7 +32,7 @@ from lib.http import ApiError, AsyncHttp, HttpMethod, NotFoundError
 from lib.logger import logger
 from lib.models import AccountConfig
 from lib.unwaf import ensure_unwaf
-from strategy import Order, OrderStatus, Position, ProfileInfo, Side, TradingClient
+from strategy import Order, OrderBook, OrderStatus, Position, ProfileInfo, Side, TradingClient
 
 # Nord (01.xyz) protobuf schema — action types, field numbers, error codes, FillMode enum:
 # https://zo-devnet.n1.xyz/schema.proto
@@ -501,6 +501,12 @@ class ZeroOneClient:
         bid = Decimal(str(ob["bids"][0][0])) if ob.get("bids") else Decimal(0)
         ask = Decimal(str(ob["asks"][0][0])) if ob.get("asks") else Decimal(0)
         return bid, ask
+
+    @ttl_cache(5)
+    async def get_order_book(self, symbol: str) -> OrderBook:
+        m = await self._market(symbol)
+        ob = await self._call("GET", f"/market/{m['marketId']}/orderbook")
+        return OrderBook.build(bids=ob.get("bids", [])[:5], asks=ob.get("asks", [])[:5])
 
     async def get_price(self, symbol: str) -> Decimal:
         bid, ask = await self.get_bbo(symbol)

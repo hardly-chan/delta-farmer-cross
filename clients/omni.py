@@ -1,5 +1,6 @@
 # delta-farmer | https://github.com/vladkens/delta-farmer
 # Copyright (c) vladkens | MIT License | If it compiles, ship it
+import asyncio
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, Self
@@ -12,7 +13,7 @@ from lib.decorators import bind_log_context, retry, ttl_cache
 from lib.http import ApiError, AsyncHttp, HttpMethod
 from lib.logger import logger
 from lib.models import AccountConfig
-from strategy import Order, OrderStatus, Position, ProfileInfo, Side, TradingClient
+from strategy import Order, OrderBook, OrderStatus, Position, ProfileInfo, Side, TradingClient
 
 API_URL = "https://omni.variational.io/api"
 APP_URL = "https://omni.variational.io"
@@ -156,6 +157,18 @@ class OmniClient:
     async def get_bbo(self, symbol: str) -> tuple[Decimal, Decimal]:
         q = await self._quote(symbol, 1)
         return q.bid, q.ask
+
+    @ttl_cache(5)
+    async def get_order_book(self, symbol: str) -> OrderBook:
+        lot = await self.get_lot_size(symbol)
+        steps = [lot, lot * 2, lot * 5, lot * 10, lot * 20]
+        quotes = await asyncio.gather(*[self._quote(symbol, qty) for qty in steps])
+
+        # Omni does not expose native L2 depth in this client. Build a synthetic book
+        # from indicative quotes so downstream code can reason about price deterioration.
+        bids = [(q.bid, q.qty) for q in quotes]
+        asks = [(q.ask, q.qty) for q in quotes]
+        return OrderBook.build(bids=bids, asks=asks)
 
     async def get_price(self, symbol: str) -> Decimal:
         return (await self._quote(symbol, 1)).mark_price

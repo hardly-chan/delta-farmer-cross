@@ -14,7 +14,7 @@ from lib import utils
 from lib.decorators import bind_log_context, retry, ttl_cache
 from lib.http import ApiError, AsyncHttp, HttpMethod
 from lib.models import AccountConfig
-from strategy import Order, OrderStatus, Position, ProfileInfo, Side, TradingClient
+from strategy import Order, OrderBook, OrderStatus, Position, ProfileInfo, Side, TradingClient
 
 API_URL = "https://api.pacifica.fi/api/v1"
 APP_URL = "https://app.pacifica.fi"
@@ -187,6 +187,13 @@ class PacificaClient:
     async def get_bbo(self, symbol: str) -> tuple[Decimal, Decimal]:
         bids, asks = await self._order_book(symbol)
         return bids[0].price, asks[0].price
+
+    async def get_order_book(self, symbol: str) -> OrderBook:
+        bids, asks = await self._order_book(symbol)
+        return OrderBook.build(
+            bids=[(x.price, x.amount) for x in bids[:5]],
+            asks=[(x.price, x.amount) for x in asks[:5]],
+        )
 
     async def get_price(self, symbol: str) -> Decimal:
         bid, ask = await self.get_bbo(symbol)

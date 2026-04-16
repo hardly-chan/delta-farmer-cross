@@ -14,7 +14,7 @@ from lib.decorators import bind_log_context, retry, ttl_cache
 from lib.http import ApiError, AsyncHttp, HttpMethod
 from lib.logger import logger
 from lib.models import AccountConfig
-from strategy import Order, OrderStatus, Position, ProfileInfo, Side, TradingClient
+from strategy import Order, OrderBook, OrderStatus, Position, ProfileInfo, Side, TradingClient
 
 API_URL = "https://api.ethereal.trade/v1"
 APP_URL = "https://app.ethereal.trade"
@@ -223,6 +223,13 @@ class EtherealClient:
             raise ApiError(f"No market price for {symbol}")
 
         return Decimal(res[0]["bestBidPrice"]), Decimal(res[0]["bestAskPrice"])
+
+    @ttl_cache(5)
+    async def get_order_book(self, symbol: str) -> OrderBook:
+        sym = await self.symbol_info(symbol=symbol)
+        res = await self._call("GET", "/product/market-liquidity", params={"productId": sym.id})
+        data = res["data"]
+        return OrderBook.build(bids=data["bids"][:5], asks=data["asks"][:5])
 
     async def get_price(self, symbol: str) -> Decimal:
         bid, ask = await self.get_bbo(symbol)
