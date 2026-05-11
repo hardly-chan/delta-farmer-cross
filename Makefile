@@ -1,4 +1,4 @@
-.PHONY: prepare lint test update clean deploy foreach info stats-was stats-now
+.PHONY: prepare lint test update clean deploy foreach info proxy stats-was stats-now
 
 FOREACH_CLT := $(filter-out hyperliquid vault,$(basename $(notdir $(wildcard apps/*.py))))
 FOREACH_CMD := $(strip $(cmd) $(if $(filter all,$(p)),,$(p)))
@@ -32,6 +32,9 @@ foreach:
 
 info:
 	@$(MAKE) -s foreach cmd="info"
+
+proxy:
+	@$(MAKE) -s foreach cmd="proxy"
 
 stats-was:
 	@$(MAKE) -s foreach cmd="stats last"

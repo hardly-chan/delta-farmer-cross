@@ -18,6 +18,8 @@ from . import telemetry
 from .crypto import config_cli_parser
 from .errors import AppError
 from .logger import logger
+from .models import AccountConfig
+from .proxy import print_proxies
 from .telegram import TgConfig
 
 
@@ -126,6 +128,25 @@ async def _handle_tgtest(name: str) -> None:
     eprint("Message sent.")
 
 
+def _load_accounts_config(filepath: str) -> list[AccountConfig]:
+    try:
+        with open(filepath, "rb") as fp:
+            obj = tomllib.load(fp)
+    except FileNotFoundError:
+        eprint(f"Config file not found: {filepath}")
+        sys.exit(1)
+    except tomllib.TOMLDecodeError as e:
+        eprint(f"Invalid TOML syntax in {filepath}: {e}")
+        sys.exit(1)
+
+    try:
+        accounts = obj.get("accounts", [])
+        return [AccountConfig.model_validate(acc) for acc in accounts]
+    except Exception as e:
+        eprint(f"Failed to load accounts from {filepath}: {e}")
+        sys.exit(1)
+
+
 async def create_cli(name: str, config_path: str, sec_fields: list[str]) -> argparse.Namespace:
     cli = argparse.ArgumentParser(prog=name, formatter_class=HelpFormatter)
 
@@ -134,6 +155,7 @@ async def create_cli(name: str, config_path: str, sec_fields: list[str]) -> argp
     sub.add_parser("close", help="Close all positions")
     sub.add_parser("positions", help="Show active positions")
     sub.add_parser("info", help="Show accounts info")
+    sub.add_parser("proxy", help="Check configured proxies")
     sub.add_parser("clean", help="Delete cached data")
     sub.add_parser("tgtest", help=argparse.SUPPRESS)
 
@@ -177,6 +199,10 @@ async def create_cli(name: str, config_path: str, sec_fields: list[str]) -> argp
         if not files:
             eprint("No cache files found")
         exit(0)
+
+    if args.command == "proxy":
+        await print_proxies(_load_accounts_config(args.config))
+        sys.exit(0)
 
     if args.command in ("trade", "tgtest"):
         tg.init(name, _load_tg_config(args.config))
