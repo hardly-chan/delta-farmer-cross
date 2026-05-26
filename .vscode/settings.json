@@ -10,20 +10,12 @@
   "editor.formatOnSave": true,
   "files.exclude": {
     ".cache": true,
-    ".claude": true,
     ".pytest_cache": true,
     ".python-version": true,
     ".venv/**": true,
     "**/.gitkeep": true,
     "LICENSE": true,
     "uv.lock": true
-  },
-  "github.copilot.enable": {
-    "*": true,
-    "dotenv": false,
-    "plaintext": false,
-    "properties": false,
-    "toml": false
   },
   "prettier.requireConfig": false,
   "ruff.lineLength": 100

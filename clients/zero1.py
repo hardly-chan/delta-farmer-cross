@@ -71,7 +71,6 @@ async def _get_points_meta(
         if d and d.get("act") != stale_act:
             return d["act"], d["dpl"]
 
-        logger.info("Points meta stale, discovering fresh values...")
         # discover: RSC fetch → chunk scan → find createToken action hash
         rsc_hdr = {
             "RSC": "1",
@@ -92,7 +91,6 @@ async def _get_points_meta(
             if m:
                 act = m.group(1)
                 utils.json_dump(_POINTS_META_CACHE, {"act": act, "dpl": dpl})
-                logger.info(f"Points meta updated: AUTH_ACT={act!r} NEXT_DPL={dpl!r}")
                 return act, dpl
 
         logger.warning("Points meta discovery failed, using fallback")

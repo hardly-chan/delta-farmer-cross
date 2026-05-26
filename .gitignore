@@ -1,14 +1,6 @@
 __pycache__/
 .cache/
-.claude/
-.env
 .venv/
 *.har
 *.pyc
-/*.py
-/*.txt
 configs/
-demo/
-scripts/debug_*.py
-tasks/
-uv.lock

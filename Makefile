@@ -15,7 +15,9 @@ test:
 	uv run pytest -v
 
 update:
-	uv sync --upgrade --all-groups
+	uv lock --upgrade
+	uv audit --frozen
+	uv sync --locked --all-groups
 
 clean:
 	rm -rf .ruff_cache .venv uv.lock .python-version
