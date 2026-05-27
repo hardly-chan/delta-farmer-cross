@@ -8,8 +8,21 @@ from typing import cast
 import pytest
 
 from strategy.cycle import DeltaStrategy
-from strategy.execution import fill_limit_order
-from strategy.models import Order, OrderStatus, Position, Side, StrategyConfig, TradingClient
+from strategy.execution import (
+    _simulate_book_fill,
+    evaluate_entry_quality,
+    fill_limit_order,
+    wait_for_entry_quality,
+)
+from strategy.models import (
+    Order,
+    OrderBook,
+    OrderStatus,
+    Position,
+    Side,
+    StrategyConfig,
+    TradingClient,
+)
 from strategy.trade import DeltaLeg, DeltaTrade, DeltaTradeSummary
 
 
@@ -33,6 +46,10 @@ def make_position(symbol: str, side: Side, size: str, entry: str = "50000") -> P
     return Position(
         id="p1", symbol=symbol, side=side, size=Decimal(size), entry_price=Decimal(entry)
     )
+
+
+def make_book(bids: list[tuple[str, str]], asks: list[tuple[str, str]]) -> OrderBook:
+    return OrderBook.build(bids=bids, asks=asks)
 
 
 def make_cfg(**kw) -> StrategyConfig:
@@ -88,6 +105,9 @@ class MockClient(TradingClient):
 
     async def get_bbo(self, symbol: str):
         return Decimal("49999"), Decimal("50001")
+
+    async def get_order_book(self, symbol: str):
+        return make_book([("49999", "10")], [("50001", "10")])
 
     async def get_lot_size(self, symbol: str):
         return Decimal("0.001")
@@ -181,8 +201,13 @@ class FakeTrade:
     async def log_plan(self) -> None:
         self.calls.append(f"{self.symbol}:log_plan")
 
-    async def open(self, cfg: StrategyConfig) -> None:
+    async def gate(self, cfg: StrategyConfig) -> bool:
+        self.calls.append(f"{self.symbol}:gate")
+        return True
+
+    async def open(self, cfg: StrategyConfig) -> bool:
         self.calls.append(f"{self.symbol}:open")
+        return True
 
     async def state(self, cfg: StrategyConfig) -> DeltaTradeSummary:
         self.calls.append(f"{self.symbol}:state")
@@ -228,11 +253,25 @@ async def test_trade_check_min_sizes_raises_for_failing_accounts():
 async def test_trade_open_market_mode():
     a, b = MockClient("a"), MockClient("b", side="ask")
     trade = make_trade(lead_client=a, rest_clients=[b])
-
-    await trade.open(make_cfg(use_limit=False))
+    assert await trade.open(make_cfg(use_limit=False)) is True
     assert a.calls.count("market_order") == 1
     assert b.calls.count("market_order") == 1
     assert "limit_order" not in a.calls
+
+
+async def test_trade_gate_market_mode_uses_wait_for_entry_quality(monkeypatch):
+    a, b = MockClient("a"), MockClient("b", side="ask")
+    trade = make_trade(lead_client=a, rest_clients=[b])
+    seen: list[tuple[str, list[tuple[Side, Decimal]]]] = []
+
+    async def gate_ok(client, symbol, legs, cfg):
+        seen.append((symbol, legs))
+        return object()
+
+    monkeypatch.setattr("strategy.trade.wait_for_entry_quality", gate_ok)
+
+    assert await trade.gate(make_cfg(use_limit=False)) is True
+    assert seen == [("BTC", [("bid", Decimal("0.002")), ("ask", Decimal("0.002"))])]
 
 
 async def test_trade_open_limit_mode_fills(monkeypatch):
@@ -245,9 +284,21 @@ async def test_trade_open_limit_mode_fills(monkeypatch):
 
     monkeypatch.setattr("strategy.trade._fill_limit_order", fake_limit)
 
-    await trade.open(make_cfg(use_limit=True))
+    assert await trade.open(make_cfg(use_limit=True)) is True
     assert "market_order" not in a.calls
     assert b.calls.count("market_order") == 1
+
+
+async def test_trade_gate_limit_mode_skips_when_gate_times_out(monkeypatch):
+    a, b = MockClient("a"), MockClient("b", side="ask")
+    trade = make_trade(lead_client=a, rest_clients=[b])
+
+    async def gate_none(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr("strategy.trade.wait_for_entry_quality", gate_none)
+
+    assert await trade.gate(make_cfg(use_limit=True)) is False
 
 
 async def test_trade_open_limit_mode_fails(monkeypatch):
@@ -434,6 +485,7 @@ async def test_cycle_uses_trade_objects_and_limit_close(monkeypatch):
         "BTC:check_min_sizes",
         "BTC:check_leverage:10",
         "BTC:log_plan",
+        "BTC:gate",
         "BTC:open",
         "monitor",
         "BTC:close",
@@ -480,6 +532,140 @@ async def test_cycle_aborts_before_open_when_trade_check_fails(monkeypatch):
     with pytest.raises(RuntimeError, match="min size fail"):
         await strategy.trade_cycle()
     assert "BTC:open" not in trade.calls
+
+
+async def test_cycle_skips_cleanly_when_first_trade_gate_blocks(monkeypatch):
+    accs = [MockClient("prime"), MockClient("acc2")]
+    strategy = DeltaStrategy(make_cfg(use_limit=True), accs)
+    strategy.initial_bal = Decimal("2000")
+    calls: list[str] = []
+    close_calls: list[bool] = []
+    trade = FakeTrade(
+        "BTC",
+        DeltaTradeSummary(
+            symbol="BTC",
+            total_pnl=Decimal(0),
+            total_entry_cost=Decimal("100"),
+            combined_roi=Decimal(0),
+            max_abs_leg_roi=Decimal(0),
+            leg_count=2,
+            open_leg_count=2,
+            has_size_drift=False,
+            roi_breach=False,
+            healthy=True,
+        ),
+        calls,
+        close_calls,
+        [
+            DeltaLeg(cast(TradingClient, accs[0]), "bid", Decimal("50")),
+            DeltaLeg(cast(TradingClient, accs[1]), "ask", Decimal("50")),
+        ],
+    )
+
+    async def fake_plan(*args, **kwargs):
+        return [trade]
+
+    async def gate_false(cfg):
+        calls.append("BTC:gate")
+        return False
+
+    trade.gate = gate_false  # type: ignore[method-assign]
+    monkeypatch.setattr("strategy.cycle.plan_delta_trades", fake_plan)
+    monkeypatch.setattr("strategy.cycle.random.sample", lambda seq, n: list(seq)[:n])
+
+    await strategy.trade_cycle()
+    assert calls == [
+        "BTC:load_qtys",
+        "BTC:check_min_sizes",
+        "BTC:check_leverage:10",
+        "BTC:log_plan",
+        "BTC:gate",
+    ]
+    assert close_calls == []
+
+
+async def test_cycle_skips_all_opens_when_any_gate_blocks(monkeypatch):
+    accs = [MockClient("prime"), MockClient("acc2")]
+    strategy = DeltaStrategy(
+        make_cfg(use_limit=True, symbols=["BTC", "ETH"], symbols_per_trade=2), accs
+    )
+    strategy.initial_bal = Decimal("2000")
+    calls: list[str] = []
+    close_calls: list[bool] = []
+    summary = DeltaTradeSummary(
+        symbol="BTC",
+        total_pnl=Decimal(0),
+        total_entry_cost=Decimal("100"),
+        combined_roi=Decimal(0),
+        max_abs_leg_roi=Decimal(0),
+        leg_count=2,
+        open_leg_count=2,
+        has_size_drift=False,
+        roi_breach=False,
+        healthy=True,
+    )
+    trade1 = FakeTrade(
+        "BTC",
+        summary,
+        calls,
+        close_calls,
+        [
+            DeltaLeg(cast(TradingClient, accs[0]), "bid", Decimal("50")),
+            DeltaLeg(cast(TradingClient, accs[1]), "ask", Decimal("50")),
+        ],
+    )
+    trade2 = FakeTrade(
+        "ETH",
+        DeltaTradeSummary(
+            symbol="ETH",
+            total_pnl=Decimal(0),
+            total_entry_cost=Decimal("100"),
+            combined_roi=Decimal(0),
+            max_abs_leg_roi=Decimal(0),
+            leg_count=2,
+            open_leg_count=2,
+            has_size_drift=False,
+            roi_breach=False,
+            healthy=True,
+        ),
+        calls,
+        close_calls,
+        [
+            DeltaLeg(cast(TradingClient, accs[0]), "bid", Decimal("50")),
+            DeltaLeg(cast(TradingClient, accs[1]), "ask", Decimal("50")),
+        ],
+    )
+
+    async def fake_plan(*args, **kwargs):
+        return [trade1, trade2]
+
+    async def gate_true(cfg):
+        calls.append("BTC:gate")
+        return True
+
+    async def gate_false(cfg):
+        calls.append("ETH:gate")
+        return False
+
+    trade1.gate = gate_true  # type: ignore[method-assign]
+    trade2.gate = gate_false  # type: ignore[method-assign]
+    monkeypatch.setattr("strategy.cycle.plan_delta_trades", fake_plan)
+    monkeypatch.setattr("strategy.cycle.random.sample", lambda seq, n: list(seq)[:n])
+
+    await strategy.trade_cycle()
+    assert calls == [
+        "BTC:load_qtys",
+        "BTC:check_min_sizes",
+        "BTC:check_leverage:10",
+        "BTC:log_plan",
+        "ETH:load_qtys",
+        "ETH:check_min_sizes",
+        "ETH:check_leverage:10",
+        "ETH:log_plan",
+        "BTC:gate",
+        "ETH:gate",
+    ]
+    assert close_calls == []
 
 
 async def test_loop_closes_all_on_startup():
@@ -756,3 +942,170 @@ async def test_limit_stable_bbo_resets_timer(monkeypatch):
     assert result.status == OrderStatus.FILLED
     assert "cancel_order" not in a.calls
     assert "market_order" not in a.calls
+
+
+def test_simulate_book_fill_single_level():
+    levels = OrderBook.build(bids=[("100", "2")], asks=[("101", "3")]).asks
+
+    result = _simulate_book_fill(levels, Decimal("2"))
+
+    assert result == Decimal("101")
+
+
+def test_simulate_book_fill_multiple_levels():
+    levels = OrderBook.build(
+        bids=[("100", "5")],
+        asks=[("101", "1"), ("102", "2"), ("103", "5")],
+    ).asks
+
+    result = _simulate_book_fill(levels, Decimal("2.5"))
+
+    assert result == Decimal("254") / Decimal("2.5")
+
+
+def test_simulate_book_fill_not_enough_depth():
+    levels = OrderBook.build(bids=[("100", "1")], asks=[("101", "1"), ("102", "1")]).asks
+
+    result = _simulate_book_fill(levels, Decimal("3"))
+
+    assert result is None
+
+
+def test_simulate_book_fill_empty_side():
+    result = _simulate_book_fill([], Decimal("1"))
+
+    assert result is None
+
+
+@pytest.mark.parametrize("qty", [Decimal(0), Decimal("-1")])
+def test_simulate_book_fill_rejects_non_positive_qty(qty):
+    with pytest.raises(ValueError, match="qty must be positive"):
+        _simulate_book_fill([], qty)
+
+
+def test_evaluate_entry_quality_good_symmetric_book():
+    book = OrderBook.build(
+        bids=[("99", "3"), ("98", "3")],
+        asks=[("101", "3"), ("102", "3")],
+    )
+
+    result = evaluate_entry_quality(book, [("bid", Decimal("2")), ("ask", Decimal("2"))])
+
+    assert result.avg_bid_price == Decimal("101")
+    assert result.avg_ask_price == Decimal("99")
+    assert result.entry_spread_pct == Decimal("2.020202020202020202020202020")
+
+
+def test_evaluate_entry_quality_detects_asymmetric_cost():
+    book = OrderBook.build(
+        bids=[("99", "1"), ("95", "10")],
+        asks=[("101", "1"), ("103", "10")],
+    )
+
+    result = evaluate_entry_quality(book, [("bid", Decimal("2")), ("ask", Decimal("2"))])
+
+    assert result.avg_bid_price == Decimal("102")
+    assert result.avg_ask_price == Decimal("97")
+    assert result.entry_spread_pct == Decimal("5") / Decimal("97") * 100
+
+
+def test_evaluate_entry_quality_marks_insufficient_depth():
+    book = OrderBook.build(
+        bids=[("99", "1")],
+        asks=[("101", "1")],
+    )
+
+    result = evaluate_entry_quality(book, [("bid", Decimal("2")), ("ask", Decimal("1"))])
+
+    assert result.avg_bid_price is None
+    assert result.avg_ask_price == Decimal("99")
+    assert result.entry_spread_pct is None
+
+
+def test_evaluate_entry_quality_sums_multiple_legs_same_side():
+    book = OrderBook.build(
+        bids=[("99", "5"), ("98", "5")],
+        asks=[("101", "5"), ("102", "5")],
+    )
+
+    result = evaluate_entry_quality(
+        book,
+        [("bid", Decimal("1")), ("bid", Decimal("2")), ("ask", Decimal("3"))],
+    )
+
+    assert result.avg_bid_price == Decimal("101")
+    assert result.avg_ask_price == Decimal("99")
+    assert result.entry_spread_pct == Decimal("2.020202020202020202020202020")
+
+
+async def test_wait_for_entry_quality_disabled_returns_immediately():
+    a = MockClient("a")
+
+    result = await wait_for_entry_quality(
+        a,
+        "BTC",
+        [("bid", Decimal("1")), ("ask", Decimal("1"))],
+        make_cfg(max_entry_spread_pct=None),
+    )
+
+    assert result is not None
+    assert result.avg_bid_price is None
+    assert result.avg_ask_price is None
+    assert result.entry_spread_pct is None
+
+
+async def test_wait_for_entry_quality_returns_immediately_when_quality_ok():
+    a = MockClient("a")
+
+    result = await wait_for_entry_quality(
+        a,
+        "BTC",
+        [("bid", Decimal("1")), ("ask", Decimal("1"))],
+        make_cfg(max_entry_spread_pct=2.10),
+    )
+
+    assert result is not None
+    assert result.entry_spread_pct == Decimal("0.004000080001600032000640012800")
+
+
+async def test_wait_for_entry_quality_polls_until_quality_ok(monkeypatch):
+    a = MockClient("a")
+    monkeypatch.setattr("strategy.execution.asyncio.sleep", _instant_sleep)
+    calls = 0
+
+    async def changing_book(symbol: str):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return make_book([("95", "1")], [("105", "1")])
+        return make_book([("99.99", "10")], [("100.01", "10")])
+
+    a.get_order_book = changing_book  # type: ignore[method-assign]
+    result = await wait_for_entry_quality(
+        a,
+        "BTC",
+        [("bid", Decimal("1")), ("ask", Decimal("1"))],
+        make_cfg(max_entry_spread_pct=0.05, entry_gate_wait=1),
+    )
+
+    assert result is not None
+    assert calls >= 2
+    assert result.entry_spread_pct == Decimal("0.02000200020002000200020002000")
+
+
+async def test_wait_for_entry_quality_times_out(monkeypatch):
+    a = MockClient("a")
+    monkeypatch.setattr("strategy.execution.asyncio.sleep", _instant_sleep)
+
+    async def bad_book(symbol: str):
+        return make_book([("90", "0.1")], [("110", "0.1")])
+
+    a.get_order_book = bad_book  # type: ignore[method-assign]
+    result = await wait_for_entry_quality(
+        a,
+        "BTC",
+        [("bid", Decimal("1")), ("ask", Decimal("1"))],
+        make_cfg(max_entry_spread_pct=0.10, entry_gate_wait=0),
+    )
+
+    assert result is None

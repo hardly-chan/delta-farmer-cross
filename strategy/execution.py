@@ -3,13 +3,111 @@
 import asyncio
 import time
 from collections.abc import Sequence
+from dataclasses import dataclass
 from decimal import Decimal
 
 from lib.errors import AppError
 from lib.logger import logger
 from lib.utils import round_to_tick_size
 
-from .models import Order, OrderStatus, Side, TradingClient
+from .models import (
+    Order,
+    OrderBook,
+    OrderBookLevel,
+    OrderStatus,
+    Side,
+    StrategyConfig,
+    TradingClient,
+)
+
+
+@dataclass(frozen=True)
+class EntryQuality:
+    avg_bid_price: Decimal | None
+    avg_ask_price: Decimal | None
+    entry_spread_pct: Decimal | None
+
+
+def _simulate_book_fill(levels: list[OrderBookLevel], qty: Decimal) -> Decimal | None:
+    if qty <= 0:
+        raise ValueError(f"qty must be positive, got {qty}")
+
+    remaining = qty
+    notional = Decimal(0)
+    filled = Decimal(0)
+
+    for level in levels:
+        if remaining <= 0:
+            break
+        take = min(level.size, remaining)
+        if take <= 0:
+            continue
+        notional += take * level.price
+        filled += take
+        remaining -= take
+
+    return notional / filled if filled > 0 and filled == qty else None
+
+
+def evaluate_entry_quality(
+    order_book: OrderBook,
+    legs: Sequence[tuple[Side, Decimal]],
+) -> EntryQuality:
+    bid_qty = sum((qty for side, qty in legs if side == "bid"), Decimal(0))
+    ask_qty = sum((qty for side, qty in legs if side == "ask"), Decimal(0))
+
+    avg_bid_price = _simulate_book_fill(order_book.asks, bid_qty) if bid_qty else None
+    avg_ask_price = _simulate_book_fill(order_book.bids, ask_qty) if ask_qty else None
+    entry_spread_pct = (
+        abs(avg_ask_price - avg_bid_price) / avg_ask_price * 100
+        if avg_bid_price is not None and avg_ask_price is not None and avg_ask_price > 0
+        else None
+    )
+
+    return EntryQuality(
+        avg_bid_price=avg_bid_price,
+        avg_ask_price=avg_ask_price,
+        entry_spread_pct=entry_spread_pct,
+    )
+
+
+async def wait_for_entry_quality(
+    client: TradingClient, symbol: str, legs: Sequence[tuple[Side, Decimal]], cfg: StrategyConfig
+) -> EntryQuality | None:
+    if cfg.max_entry_spread_pct is None:
+        return EntryQuality(None, None, None)
+
+    log = logger.bind(account=client.name)
+    timeout = cfg.entry_gate_wait
+    poll_interval = cfg.entry_gate_poll
+    deadline = time.time() + timeout
+    warned = False
+    last_quality: EntryQuality | None = None
+
+    def fmt(x: Decimal | None) -> str:
+        return f"{x:.2f}%" if x is not None else "n/a"
+
+    while True:
+        quality = evaluate_entry_quality(await client.get_order_book(symbol), legs)
+        last_quality = quality
+        if (
+            quality.entry_spread_pct is not None
+            and quality.entry_spread_pct <= cfg.max_entry_spread_pct
+        ):
+            return quality
+
+        if not warned:
+            log.info(f"{symbol} gate no spread={fmt(quality.entry_spread_pct)}, waiting...")
+            warned = True
+
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            spread = fmt(last_quality.entry_spread_pct if last_quality else None)
+            log.info(f"{symbol} gate skip spread={spread} timeout={timeout:.0f}s")
+            return None
+
+        await asyncio.sleep(min(poll_interval, remaining))
+
 
 # MARK: Limit order
 

@@ -5,6 +5,7 @@ FOREACH_CMD := $(strip $(cmd) $(if $(filter all,$(p)),,$(p)))
 FOREACH_RUN = echo "\n── $(1) ──" && uv run -m apps.$(1) $(FOREACH_CMD) --no-banner || exit $$?
 
 prepare: lint test
+	uv lock --check
 
 lint:
 	uv run ruff format .

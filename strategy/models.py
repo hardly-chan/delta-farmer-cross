@@ -187,6 +187,9 @@ class StrategyConfig(BaseModel):
     use_limit: bool = False
     limit_wait: DurationSec = DurationSec("90s")
     limit_market_fallback: bool = True
+    max_entry_spread_pct: Decimal | None = Field(Decimal("0.25"), gt=0)
+    entry_gate_wait: DurationSec = DurationSec("5m")
+    entry_gate_poll: DurationSec = Field(DurationSec("3s"), ge=1, le=10)
     first_as_prime: bool = False
     group_size: int | None = Field(None, ge=2, le=5)
     regroup_interval: DurationSec | None = None

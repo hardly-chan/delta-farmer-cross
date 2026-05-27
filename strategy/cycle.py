@@ -170,6 +170,11 @@ class DeltaStrategy:
             await trade.check_leverage(self.cfg.leverage)
             await trade.log_plan()
 
+        # Wait until all selected markets are acceptable, then try to open them quickly.
+        gate_ok = await asyncio.gather(*[trade.gate(self.cfg) for trade in trades])
+        if not all(gate_ok):
+            return
+
         # Notify Telegram (if enabled)
         act_usd = sum(sum(leg.size_usd for leg in trade.legs) for trade in trades)
         s_names = [trade.symbol for trade in trades]

@@ -7,7 +7,7 @@ from decimal import Decimal
 from lib.logger import logger
 from lib.utils import find_safe_pair, round_to_tick_size
 
-from .execution import fill_limit_order
+from .execution import fill_limit_order, wait_for_entry_quality
 from .models import Position, Side, StrategyConfig, TradingClient, opposite_side, usd_to_qty
 
 USD_TICK = Decimal("0.01")
@@ -194,7 +194,13 @@ class DeltaTrade:
         failed_accs = ", ".join(act.client.name for act, _ in vals)
         raise RuntimeError(f"Trade size below minimum for: {failed_accs}")
 
-    async def open(self, cfg: StrategyConfig) -> None:
+    async def gate(self, cfg: StrategyConfig) -> bool:
+        rs = await wait_for_entry_quality(
+            self.lead.client, self.symbol, [(leg.side, leg.qty) for leg in self.legs], cfg
+        )
+        return rs is not None
+
+    async def open(self, cfg: StrategyConfig) -> bool:
         if cfg.use_limit:
             clt, side, qty = self.lead.client, self.lead.side, self.lead.qty
             order = await _fill_limit_order(clt, self.symbol, side, qty, cfg)
@@ -211,6 +217,7 @@ class DeltaTrade:
             log.debug(f"Market {leg.side} {leg.qty} {self.symbol} filled")
 
         # todo: report opened log with spread info
+        return True
 
     async def close(self, cfg: StrategyConfig, use_limit=False) -> None:
         if use_limit:
