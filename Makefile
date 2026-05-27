@@ -20,7 +20,7 @@ update:
 	uv sync --locked --all-groups
 
 clean:
-	rm -rf .ruff_cache .venv uv.lock .python-version
+	rm -rf .ruff_cache .venv uv.lock .python-version .pytest_cache
 	find . -type f -name "*.pyc" -delete
 
 # --- Foreach ---
@@ -54,4 +54,4 @@ UV=~/.local/bin/uv
 
 deploy:
 	$(SYNC) ./ $(HOST):$(DDIR)
-	$(EXEC) "cd $(DDIR) && $(UV) sync"
+	$(EXEC) "cd $(DDIR) && $(UV) sync --locked"

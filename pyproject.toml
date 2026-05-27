@@ -12,6 +12,7 @@ dependencies = [
     "cryptography>=44.0.0",
     "curl-cffi>=0.14.0",
     "filelock>=3.24.3",
+    "lz4>=4.0.0",
     "loguru>=0.7.3",
     "msgpack>=1.1.2",
     "py-machineid>=1.0.0",

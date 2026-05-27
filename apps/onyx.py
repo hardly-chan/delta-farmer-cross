@@ -1,5 +1,6 @@
 # delta-farmer | https://github.com/vladkens/delta-farmer
 # Copyright (c) vladkens | MIT License | Built by humans, blamed on AI
+import asyncio
 from collections import defaultdict
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -34,7 +35,18 @@ async def sync_fills(acc: OnyxClient, ttl: int) -> list[dict]:
 # MARK: Reports
 
 
-async def print_info(accs: list[OnyxClient]):
+def _calc_burn(fills: list[dict]) -> Decimal:
+    pnl = sum((Decimal(str(f.get("closedPnl", 0))) for f in fills), Decimal(0))
+    fee = sum((Decimal(str(f.get("fee", 0))) for f in fills), Decimal(0))
+    return -(pnl - fee)
+
+
+def _calc_vol(fills: list[dict]) -> Decimal:
+    return sum((Decimal(str(f["px"])) * Decimal(str(f["sz"])) for f in fills), Decimal(0))
+
+
+async def print_info(accs: list[OnyxClient], force: bool = False):
+    ttl = 0 if force else 3600
     tbl = AutoTable(
         Column("", justify="left"),
         Column("Account", justify="left"),
@@ -42,22 +54,39 @@ async def print_info(accs: list[OnyxClient]):
         Column("Volume", "{:,.0f}", total=sum),
         Column("Burn", "{:,.2f}", total=sum),
         Column("Points", "{:,.1f}", total=sum),
-        Column("P/Price", "{:,.2f}", compute=lambda r: r["Burn"] / r["Points"]),
+        Column("P/Price", "{:,.4f}", compute=lambda r: r["Burn"] / r["Points"]),
         Column("Balance", "{:,.2f}", total=sum),
     )
 
+    vol_rows: list[tuple[Decimal, Decimal]] = []
+
     async def row(acc: OnyxClient):
         await acc.warmup()
-        p = await acc.profile() if await acc.registered() else None
-        a = short_addr(acc.address)
-        if not p:
+        if not await acc.registered():
+            a = short_addr(acc.address)
+            vol_rows.append((Decimal(0), Decimal(0)))
             return ("✗", acc.name, a, 0, 0, 0, 0)
-        return ("✓", acc.name, a, p.volume, -p.pnl, p.points, p.balance)
+
+        p, fills = await asyncio.gather(acc.profile(), sync_fills(acc, ttl))
+        a = short_addr(acc.address)
+        burn = _calc_burn(fills)
+        fills_vol = _calc_vol(fills)
+        vol_rows.append((p.volume, fills_vol))
+        return ("✓", acc.name, a, p.volume, burn, p.points, p.balance)
 
     for r in await gather_accs(accs, row):
         tbl.add_row(*r)
 
     tbl.print()
+    if vol_rows:
+        arjuna_vol = sum(v[0] for v in vol_rows)
+        fills_vol = sum(v[1] for v in vol_rows)
+        diff = fills_vol - arjuna_vol
+        pct = (diff / arjuna_vol * 100) if arjuna_vol else Decimal(0)
+        print(
+            "* Fills computed indirectly (no native Onyx API). "
+            f"Volume diff vs Arjuna: {diff:+,.0f} ({pct:+.2f}%)"
+        )
 
 
 async def print_stats(

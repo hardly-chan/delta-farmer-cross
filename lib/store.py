@@ -37,7 +37,6 @@ class DataStore[T]:
         except Exception as e:
             logger.warning(f"Failed to deserialize {self.filepath.split('/')[-1]}, dropping data")
             logger.error(e)
-            exit(0)
             self.last_dt = None
             self.records = {}
 

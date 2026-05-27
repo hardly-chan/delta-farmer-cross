@@ -99,11 +99,8 @@ class HyperLiquidClient:
             raise ApiError("Info error", rep)
         return rep.json()
 
-    async def fetch_fills(self, since: datetime | None = None) -> list[dict]:
-        """Fetch all fills via userFillsByTime (paginated). Filtered by dex_prefix:
-        non-empty prefix → only fills with matching 'dex:' coin prefix;
-        empty prefix → only native HL fills (no ':' in coin)."""
-
+    async def _fetch_fills(self, since: datetime | None = None, *, aggregate=True) -> list[dict]:
+        """Fetch all fills via userFillsByTime (paginated), no coin filter."""
         start_ms = int(since.timestamp() * 1000) if since else 0
         all_fills: list[dict] = []
         while True:
@@ -111,13 +108,19 @@ class HyperLiquidClient:
                 type="userFillsByTime",
                 user=self.address,
                 startTime=start_ms,
-                aggregateByTime=True,
+                aggregateByTime=aggregate,
             )
             all_fills.extend(page)
             if len(page) < 2000:
                 break
             start_ms = page[-1]["time"] + 1
+        return all_fills
 
+    async def fetch_fills(self, since: datetime | None = None) -> list[dict]:
+        """Fetch fills filtered by dex_prefix:
+        non-empty prefix → only fills with matching 'dex:' coin prefix;
+        empty prefix → only native HL fills (no ':' in coin)."""
+        all_fills = await self._fetch_fills(since)
         if self.dex_prefix:
             return [f for f in all_fills if f["coin"].startswith(f"{self.dex_prefix}:")]
         return [f for f in all_fills if ":" not in f["coin"]]

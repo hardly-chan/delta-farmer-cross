@@ -1,15 +1,20 @@
 # delta-farmer | https://github.com/vladkens/delta-farmer
 # Copyright (c) vladkens | MIT License | Built by humans, blamed on AI
 import asyncio
-from datetime import UTC, datetime
+import csv
+import io
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from typing import ClassVar
 
+import lz4.frame
 from eth_account.messages import encode_defunct
 from pydantic import BaseModel
 
 from lib import utils
-from lib.decorators import bind_log_context
+from lib.decorators import bind_log_context, ttl_cache
 from lib.http import ApiError, AsyncHttp
+from lib.logger import logger
 from strategy import Position, ProfileInfo, TradingClient
 
 from .hyperliquid import HyperLiquidClient
@@ -27,6 +32,95 @@ _PRIVY_HEADERS = {
 }
 
 _ONYX_BUILDER = {"b": "0xb290f2f3fad4e540d0550985951cdad2711ac34a", "f": 10}
+_BUILDER_ADDR = _ONYX_BUILDER["b"]
+_ARCHIVE_START = date(2026, 1, 1)
+_ARCHIVE_CACHE = ".cache/onyx_builder.pkl"
+
+_ARCHIVE_HTTP = AsyncHttp(baseurl="https://stats-data.hyperliquid.xyz", headers={})
+
+
+# MARK: BuilderArchive
+
+
+class BuilderArchive:
+    """Disk-cached builder fills archive for identifying Onyx-attributed trades.
+
+    Cache file .cache/onyx_builder.pkl is intentionally global (not per-account)
+    and named to match the `clean` glob `.cache/onyx_*.pkl`.
+    """
+
+    _keys: ClassVar[set[tuple]] = set()
+    _last_date: ClassVar[date | None] = None
+    _loaded: ClassVar[bool] = False
+
+    @classmethod
+    def _load(cls) -> None:
+        """Load cached archive data from disk. No-ops if already loaded."""
+        if cls._loaded:
+            return
+        data = utils.pickle_load(_ARCHIVE_CACHE, lock=True)
+        if data:
+            cls._keys = data.get("keys", set())
+            cls._last_date = data.get("last_date")
+        cls._loaded = True
+
+    @classmethod
+    async def sync(cls) -> None:
+        """Download and cache any missing archive days up to today - 3 days.
+
+        Archive start is Jan 1 2026 (not GENESIS Mar 1) — GENESIS is for stats display only.
+        403/404 days mean no archive data for that day and are silently skipped.
+        Other errors log a warning and skip.
+        """
+        cls._load()
+        start = (cls._last_date + timedelta(days=1)) if cls._last_date else _ARCHIVE_START
+        end = datetime.now(UTC).date() - timedelta(days=3)
+        if start > end:
+            return
+
+        changed = False
+        day = start
+        while day <= end:
+            url = f"/Mainnet/builder_fills/{_BUILDER_ADDR}/{day.strftime('%Y%m%d')}.csv.lz4"
+            try:
+                rep = await _ARCHIVE_HTTP.request("GET", url)
+                if not rep.ok and rep.status_code not in (403, 404):
+                    logger.warning(f"BuilderArchive: fetch {day} failed: {rep.status_code}")
+                    day += timedelta(days=1)
+                    continue
+                elif rep.ok:
+                    content = lz4.frame.decompress(rep.content)
+                    reader = csv.DictReader(io.StringIO(content.decode()))
+                    for row in reader:
+                        cls._keys.add(
+                            (
+                                int(datetime.fromisoformat(row["time"]).timestamp()),
+                                row["coin"],
+                                Decimal(str(row["px"])),
+                                Decimal(str(row["sz"])),
+                            )
+                        )
+            except Exception as e:
+                logger.warning(f"BuilderArchive: error processing {day}: {e}")
+                day += timedelta(days=1)
+                continue
+
+            cls._last_date = day
+            changed = True
+            day += timedelta(days=1)
+
+        if changed:
+            utils.pickle_dump(
+                _ARCHIVE_CACHE, {"last_date": cls._last_date, "keys": cls._keys}, lock=True
+            )
+
+    @classmethod
+    def contains(cls, time_sec: int, coin: str, px: object, sz: object) -> bool:
+        """Check if a fill is in the builder archive.
+
+        Uses Decimal(str(x)) on both ingest and lookup to avoid float precision drift.
+        """
+        return (time_sec, coin, Decimal(str(px)), Decimal(str(sz))) in cls._keys
 
 
 # MARK: Models
@@ -153,14 +247,65 @@ class OnyxClient(HyperLiquidClient):
         data = await self._authed_get("/me/user")
         return OnyxUserInfo.model_validate(data)
 
+    async def points_total(self) -> Decimal:
+        data = await self._authed_get("/me/points/overview")
+        return Decimal(str(data.get("totalPoints", 0)))
+
+    @ttl_cache(300)
+    async def _fetch_order_oids(self) -> frozenset[int]:
+        """Fetch oids of filled orders from Arjuna public order-history (last 2000 orders)."""
+        try:
+            rep = await self._arjuna_http.request(
+                "GET", f"/public/users/{self.address}/order-history", params={"limit": 2000}
+            )
+            if not rep.ok:
+                return frozenset()
+            data = rep.json()
+            return frozenset(int(row["oid"]) for row in data if row.get("status") == "filled")
+        except Exception as e:
+            logger.warning(f"fetch_order_oids: {e}")
+            return frozenset()
+
+    async def fetch_fills(self, since: datetime | None = None) -> list[dict]:
+        """Return only Onyx-attributed fills (confirmed via archive or order-history OIDs)."""
+        raw_fills, (_, oid_set) = await asyncio.gather(
+            self._fetch_fills(since, aggregate=False),
+            asyncio.gather(BuilderArchive.sync(), self._fetch_order_oids()),
+        )
+
+        cutoff_ms = int((datetime.now(UTC) - timedelta(days=3)).timestamp() * 1000)
+        missed = 0
+        archive_range = 0
+        result = []
+
+        for fill in raw_fills:
+            if fill["oid"] in oid_set or BuilderArchive.contains(
+                fill["time"] // 1000, fill["coin"], fill["px"], fill["sz"]
+            ):
+                result.append(fill)
+            elif fill["time"] < cutoff_ms:
+                archive_range += 1
+                missed += 1
+                continue
+
+            if fill["time"] < cutoff_ms:
+                archive_range += 1
+
+        if missed:
+            logger.debug(
+                f"fetch_fills: {missed}/{archive_range} fills in archive range "
+                "not confirmed as Onyx"
+            )
+
+        return result
+
     # MARK: Profile
 
     async def profile(self) -> ProfileInfo:
-        bal, info = await asyncio.gather(self.balance(), self.user_info())
+        bal, info, pts = await asyncio.gather(self.balance(), self.user_info(), self.points_total())
         s = info.accountSummary
 
-        # Keep Onyx aligned with other apps: `info` shows burn as `-pnl`.
+        pnl = s.totalPnl
+
         addr = utils.short_addr(self.address)
-        return ProfileInfo(
-            addr=addr, balance=bal, volume=s.onyxVolume, pnl=s.totalPnl, points=Decimal(0)
-        )
+        return ProfileInfo(addr=addr, balance=bal, volume=s.onyxVolume, pnl=pnl, points=pts)

@@ -24,7 +24,7 @@ async def _fill_limit_order(
     cfg: StrategyConfig,
     reduce_only=False,
 ):
-    return fill_limit_order(
+    return await fill_limit_order(
         client,
         symbol,
         side,
