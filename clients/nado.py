@@ -82,12 +82,6 @@ def _build_sender(address: str, subaccount="default") -> str:
     return "0x" + (addr + name).hex()
 
 
-def _make_nonce() -> int:
-    # recv_time: 100s window (matches Nado's order_nonce formula: (ts_ms + 100000) << 20)
-    ts_ms = int(time.time() * 1000)
-    return ((ts_ms + 100_000) << 20) + random.randint(0, (1 << 20) - 1)
-
-
 # https://docs.nado.xyz/developer-resources/api/order-appendix
 def _build_appendix(order_type=0, reduce_only=False, isolated=False, isolated_margin_x6=0) -> int:
     # bits 0-7: version=1, bit 8: isolated, bits 9-10: order_type, bit 11: reduce_only
@@ -212,6 +206,12 @@ class NadoClient:
 
         msg = encode_typed_data(full_message=msg)
         return "0x" + self.account.sign_message(msg).signature.hex()
+
+    def _make_nonce(self) -> int:
+        # recv_time = now + 90s: matches official SDK default, leaves 10s tolerance vs server's 100s max.
+        # https://github.com/nadohq/nado-python-sdk/blob/v0.3.5/nado_protocol/utils/nonce.py
+        ts_ms = int(time.time() * 1000)
+        return ((ts_ms + 90_000) << 20) + random.randint(0, (1 << 20) - 1)
 
     # MARK: Lifecycle
 
@@ -338,7 +338,7 @@ class NadoClient:
             msg = f"Order notional {notional:.2f} < min {sym.min_size:.2f} USD for {symbol}"
             raise ApiError(msg)
 
-        nonce = _make_nonce()
+        nonce = self._make_nonce()
         amount = _to_x18(qty) if side == "bid" else -_to_x18(qty)
 
         isolated = sym.isolated_only
@@ -494,7 +494,7 @@ class NadoClient:
 
     async def cancel_order(self, order: Order) -> bool:
         sym = await self.symbol_info(symbol=order.symbol)
-        nonce = _make_nonce()
+        nonce = self._make_nonce()
         msg = {
             "sender": self.sender,
             "productIds": [sym.product_id],
@@ -508,7 +508,7 @@ class NadoClient:
         return True
 
     async def cancel_all_orders(self) -> int:
-        nonce = _make_nonce()
+        nonce = self._make_nonce()
         msg = {"sender": self.sender, "productIds": [], "nonce": nonce}
 
         sig = self._sign("CancellationProducts", await self.endpoint_addr(), msg)
