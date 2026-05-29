@@ -5,6 +5,7 @@ import random
 import time
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from lib import telegram as tg
@@ -148,13 +149,23 @@ class DeltaStrategy:
 
     async def trade_cycle(self):
         """Run one full trade cycle across the selected symbols."""
+
         # 1. Get balances
         accounts = self.get_ordered_accounts()
         was_bals = await self.get_balances(accounts)
         was_bals.log()
 
         # 2. Pick symbols (markets) and build full trading plan
-        symbols = random.sample(self.cfg.symbols, self.cfg.symbols_per_trade)
+        duration = int(self.cfg.trade_duration.sample())
+        tradeable = await self._tradeable_symbols(duration)
+        if len(tradeable) < self.cfg.symbols_per_trade:
+            logger.warning(
+                f"Only {len(tradeable)}/{self.cfg.symbols_per_trade} symbols are tradeable "
+                "for the planned window; skipping cycle"
+            )
+            return
+
+        symbols = random.sample(tradeable, self.cfg.symbols_per_trade)
         exp_usd = self.get_trade_size(was_bals)
         trades = await plan_delta_trades(
             accounts, symbols, exp_usd, self.cfg.leverage, was_bals.items()
@@ -188,7 +199,7 @@ class DeltaStrategy:
             await trade.open(self.cfg)
 
         # 5. Wait with safety checks
-        success = await self.monitor_trades(trades)
+        success = await self.monitor_trades(trades, duration)
 
         # 6. Close trades one by one
         for trade in trades:
@@ -202,8 +213,7 @@ class DeltaStrategy:
 
     # MARK: Helpers
 
-    async def monitor_trades(self, trades: list[DeltaTrade]) -> bool:
-        duration = self.cfg.trade_duration.sample()
+    async def monitor_trades(self, trades: list[DeltaTrade], duration: int) -> bool:
         logger.info(utils.wait_msg(duration))
 
         until = time.time() + duration
@@ -231,6 +241,25 @@ class DeltaStrategy:
                     return False
 
         return True
+
+    async def _tradeable_symbols(self, duration: int) -> list[str]:
+        now = datetime.now(UTC)
+        drift = int(self.cfg.limit_wait) * 2
+        seq_limit = int(self.cfg.limit_wait) * self.cfg.symbols_per_trade
+        open_at = now + timedelta(seconds=int(self.cfg.entry_gate_wait) + seq_limit + drift)
+        close_at = open_at + timedelta(seconds=int(duration) + seq_limit)
+
+        by_exchange: dict[str, TradingClient] = {a.exchange: a for a in self.accounts}
+        pairs = [(s, c) for s in self.cfg.symbols for c in by_exchange.values()]
+
+        async def check(symbol: str, client: TradingClient) -> tuple[str, bool]:
+            ok1 = await client.is_symbol_tradeable(symbol, open_at)
+            ok2 = await client.is_symbol_tradeable(symbol, close_at, reduce_only=True)
+            return symbol, ok1 and ok2
+
+        results = await asyncio.gather(*[check(s, c) for s, c in pairs])
+        failed = {s for s, ok in results if not ok}
+        return [s for s in self.cfg.symbols if s not in failed]
 
     def basket_combined_roi(self, summaries: list[DeltaTradeSummary]) -> Decimal | None:
         total_pnl = sum((s.total_pnl for s in summaries), Decimal(0))

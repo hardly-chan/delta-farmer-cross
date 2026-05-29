@@ -221,6 +221,9 @@ class HyperLiquidClient:
         meta = await self._meta_for(self.dex_prefix)
         return [a["name"] for a in meta["universe"] if not a.get("isDelisted")]
 
+    async def is_symbol_tradeable(self, symbol: str, at: datetime, reduce_only=False) -> bool:
+        return True
+
     async def get_lot_size(self, symbol: str) -> Decimal:
         dex, coin = self._resolve(symbol)
         for asset in (await self._meta_for(dex))["universe"]:
@@ -356,7 +359,7 @@ class HyperLiquidClient:
         qty: Decimal,
         price: Decimal,
         tif: str,
-        reduce_only: bool = False,
+        reduce_only=False,
     ) -> Order:
         asset_id = await self._asset_id(symbol)
         order_wire = {

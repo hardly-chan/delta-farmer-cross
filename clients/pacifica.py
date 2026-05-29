@@ -177,6 +177,9 @@ class PacificaClient:
         items = sorted(items, key=lambda x: int(x.get("max_leverage", 0)), reverse=True)
         return [x["symbol"] for x in items]
 
+    async def is_symbol_tradeable(self, symbol: str, at: datetime, reduce_only=False) -> bool:
+        return True
+
     @ttl_cache(5)
     async def _order_book(self, symbol: str, agg_level=1):
         res = await self._call("GET", f"/book?symbol={symbol}&agg_level={agg_level}")

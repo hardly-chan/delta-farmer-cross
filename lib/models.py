@@ -37,7 +37,7 @@ class Range[T: (int, float)](BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _coerce(cls, v):
-        if isinstance(v, (list, tuple)):
+        if isinstance(v, list | tuple):
             if len(v) != 2:
                 raise ValueError(f"expected 2 values, got {len(v)}")
             return {"min": v[0], "max": v[1]}

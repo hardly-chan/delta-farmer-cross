@@ -4,6 +4,7 @@ import sys
 import tomllib
 import warnings
 from collections.abc import Iterable
+from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 from typing import Literal, Protocol, runtime_checkable
@@ -146,6 +147,8 @@ class TradingClient(Protocol):
     async def get_symbols(self) -> list[str]:
         """All tradable symbols, sorted by liquidity/relevance (best candidates first)."""
         ...
+
+    async def is_symbol_tradeable(self, symbol: str, at: datetime, reduce_only=False) -> bool: ...
 
     # Leverage
     async def get_leverage(self, symbol: str) -> int | None: ...

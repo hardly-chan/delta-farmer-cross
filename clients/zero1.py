@@ -479,6 +479,9 @@ class ZeroOneClient:
         info = await self._meta()
         return [m["symbol"].removesuffix("USD") for m in info.get("markets", [])]
 
+    async def is_symbol_tradeable(self, symbol: str, at: datetime, reduce_only=False) -> bool:
+        return True
+
     async def get_lot_size(self, symbol: str) -> Decimal:
         m = await self._market(symbol)
         return Decimal(10) ** -m["sizeDecimals"]
@@ -626,7 +629,7 @@ class ZeroOneClient:
         qty: Decimal,
         price: Decimal,
         fill_mode: int,
-        reduce_only: bool = False,
+        reduce_only=False,
     ) -> Order:
         sess_id, acc_id = await self._ensure_session()
         m = await self._market(symbol)

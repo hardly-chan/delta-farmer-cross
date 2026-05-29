@@ -138,6 +138,9 @@ class HyenaClient(HyperLiquidClient):
     def _filter_positions(self, positions: list[Position]) -> list[Position]:
         return [p for p in positions if p.symbol.startswith("hyna:")]
 
+    async def is_symbol_tradeable(self, symbol: str, at: datetime, reduce_only=False) -> bool:
+        return True
+
     async def _place_order(self, symbol: str, *args, **kwargs):
         if not symbol.startswith("hyna:"):
             raise ValueError(f"HyenaClient only trades hyna: symbols, got {symbol!r}")

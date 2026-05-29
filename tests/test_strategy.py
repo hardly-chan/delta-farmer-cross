@@ -2,6 +2,7 @@
 
 import asyncio
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import cast
 
@@ -79,6 +80,11 @@ class MockClient(TradingClient):
         self._price = Decimal(str(price))
         self._positions: list[Position] | None = None
         self.calls: list[str] = []
+        self.tradeable_symbols: dict[str, bool] = {}
+        self.tradeable_by_check: dict[tuple[str, bool], bool] = {}
+        self.tradeable_by_time: dict[tuple[str, datetime | None, bool], bool] = {}
+        self.tradeable_errors: dict[str, Exception] = {}
+        self.tradeable_checks: list[tuple[str, datetime | None, bool]] = []
         self._leverage: int | None = None
         self._min_trade_usd: Decimal = Decimal(10)
 
@@ -164,6 +170,26 @@ class MockClient(TradingClient):
 
     async def get_symbols(self):
         return ["BTC"]
+
+    async def is_symbol_tradeable(self, symbol: str, at: datetime, reduce_only=False) -> bool:
+        self.tradeable_checks.append((symbol, at, reduce_only))
+        if symbol in self.tradeable_errors:
+            raise self.tradeable_errors[symbol]
+        if (symbol, at, reduce_only) in self.tradeable_by_time:
+            return self.tradeable_by_time[(symbol, at, reduce_only)]
+        if (symbol, reduce_only) in self.tradeable_by_check:
+            return self.tradeable_by_check[(symbol, reduce_only)]
+        return self.tradeable_symbols.get(symbol, True)
+
+
+def test_check_cfg_rejects_symbol_pool_smaller_than_symbols_per_trade():
+    from lib.errors import AppError
+    from strategy.runner import _check_cfg
+
+    cfg = make_cfg(symbols=["BTC"], symbols_per_trade=2)
+
+    with pytest.raises(AppError, match="requires exactly 2 symbols"):
+        _check_cfg(cfg, [MockClient("a"), MockClient("b")])
 
 
 def make_trade(
@@ -385,7 +411,7 @@ async def test_monitor_trades_stop_event_exits_early():
     stop.set()
     strategy = DeltaStrategy(make_cfg(trade_duration=[5, 5]), [MockClient("a")], stop_event=stop)
 
-    result = await strategy.monitor_trades([])
+    result = await strategy.monitor_trades([], 5)
     assert result is False
 
 
@@ -406,7 +432,7 @@ async def test_monitor_trades_exits_on_unhealthy_summary(monkeypatch):
     )
     trade = FakeTrade("BTC", summary, [], [], [])
 
-    result = await strategy.monitor_trades([trade])
+    result = await strategy.monitor_trades([trade], 5)
     assert result is False
 
 
@@ -430,8 +456,226 @@ async def test_monitor_trades_exits_on_combined_roi(monkeypatch):
     )
     trade = FakeTrade("BTC", summary, [], [], [])
 
-    result = await strategy.monitor_trades([trade])
+    result = await strategy.monitor_trades([trade], 5)
     assert result is False
+
+
+async def test_tradeable_symbols_keeps_all_symbols_and_checks_window(monkeypatch):
+    base = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return base if tz is UTC else base.astimezone(tz)
+
+    monkeypatch.setattr("strategy.cycle.datetime", FrozenDateTime)
+    acc = MockClient("a")
+    strategy = DeltaStrategy(
+        make_cfg(symbols=["BTC", "ETH"], symbols_per_trade=1, limit_wait=2, entry_gate_wait=5),
+        [acc],
+    )
+
+    result = await strategy._tradeable_symbols(30)
+
+    assert result == ["BTC", "ETH"]
+    assert acc.tradeable_checks == [
+        ("BTC", base + timedelta(seconds=11), False),
+        ("BTC", base + timedelta(seconds=43), True),
+        ("ETH", base + timedelta(seconds=11), False),
+        ("ETH", base + timedelta(seconds=43), True),
+    ]
+
+
+async def test_tradeable_symbols_budgets_sequential_limit_baskets(monkeypatch):
+    base = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return base if tz is UTC else base.astimezone(tz)
+
+    monkeypatch.setattr("strategy.cycle.datetime", FrozenDateTime)
+    acc = MockClient("a")
+    strategy = DeltaStrategy(
+        make_cfg(
+            symbols=["BTC", "ETH", "SOL", "DOGE"],
+            symbols_per_trade=4,
+            limit_wait=2,
+            entry_gate_wait=5,
+            use_limit=True,
+        ),
+        [acc],
+    )
+
+    result = await strategy._tradeable_symbols(30)
+
+    assert result == ["BTC", "ETH", "SOL", "DOGE"]
+    checks_by_symbol: dict[str, list[tuple[datetime | None, bool]]] = {}
+    for symbol, at, reduce_only in acc.tradeable_checks:
+        checks_by_symbol.setdefault(symbol, []).append((at, reduce_only))
+    assert set(checks_by_symbol) == {"BTC", "ETH", "SOL", "DOGE"}
+    assert all(
+        checks
+        == [
+            (base + timedelta(seconds=17), False),
+            (base + timedelta(seconds=55), True),
+        ]
+        for checks in checks_by_symbol.values()
+    )
+
+
+async def test_tradeable_symbols_filters_unavailable():
+    a = MockClient("a")
+    a.tradeable_symbols["ETH"] = False
+    strategy = DeltaStrategy(
+        make_cfg(symbols=["BTC", "ETH", "SOL"], symbols_per_trade=1),
+        [a],
+    )
+
+    result = await strategy._tradeable_symbols(30)
+
+    assert result == ["BTC", "SOL"]
+
+
+async def test_tradeable_symbols_filters_unavailable_close_window():
+    acc = MockClient("a")
+    acc.tradeable_by_check[("ETH", True)] = False
+    strategy = DeltaStrategy(
+        make_cfg(symbols=["BTC", "ETH"], symbols_per_trade=1),
+        [acc],
+    )
+
+    result = await strategy._tradeable_symbols(30)
+
+    assert result == ["BTC"]
+    assert any(symbol == "ETH" and reduce_only for symbol, _at, reduce_only in acc.tradeable_checks)
+
+
+async def test_tradeable_symbols_filters_closed_before_entry(monkeypatch):
+    base = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return base if tz is UTC else base.astimezone(tz)
+
+    monkeypatch.setattr("strategy.cycle.datetime", FrozenDateTime)
+    acc = MockClient("a")
+    open_at = base + timedelta(seconds=300 + 90 + 180)  # entry_gate_wait + seq_limit + drift
+    acc.tradeable_by_time[("ETH", open_at, False)] = False
+    strategy = DeltaStrategy(
+        make_cfg(symbols=["BTC", "ETH"], symbols_per_trade=1),
+        [acc],
+    )
+
+    result = await strategy._tradeable_symbols(30)
+
+    assert result == ["BTC"]
+
+
+async def test_cycle_samples_from_all_tradeable_symbols(monkeypatch):
+    acc = MockClient("a")
+    strategy = DeltaStrategy(
+        make_cfg(symbols=["BTC", "ETH"], symbols_per_trade=1),
+        [acc],
+    )
+    strategy.initial_bal = Decimal("1000")
+    sampled_from: list[str] = []
+    planned_symbols: list[str] = []
+
+    def fake_sample(seq, n):
+        sampled_from.extend(seq)
+        return ["ETH"]
+
+    async def fake_plan(accounts, symbols, exp_usd, leverage, balances):
+        planned_symbols.extend(symbols)
+        return None
+
+    monkeypatch.setattr("strategy.cycle.random.sample", fake_sample)
+    monkeypatch.setattr("strategy.cycle.plan_delta_trades", fake_plan)
+
+    await strategy.trade_cycle()
+
+    assert sampled_from == ["BTC", "ETH"]
+    assert planned_symbols == ["ETH"]
+
+
+async def test_cycle_returns_early_when_too_few_symbols_tradeable(monkeypatch):
+    acc = MockClient("a")
+    acc.tradeable_symbols["ETH"] = False
+    strategy = DeltaStrategy(
+        make_cfg(symbols=["BTC", "ETH"], symbols_per_trade=2),
+        [acc],
+    )
+    strategy.initial_bal = Decimal("1000")
+    plan_called = False
+
+    async def fake_plan(*args, **kwargs):
+        nonlocal plan_called
+        plan_called = True
+        return None
+
+    def fail_sample(seq, n):
+        raise AssertionError("random.sample should not run when too few symbols are tradeable")
+
+    monkeypatch.setattr("strategy.cycle.random.sample", fail_sample)
+    monkeypatch.setattr("strategy.cycle.plan_delta_trades", fake_plan)
+
+    await strategy.trade_cycle()
+
+    assert plan_called is False
+
+
+async def test_cycle_samples_duration_once_and_passes_to_monitor(monkeypatch):
+    class CountingDuration:
+        def __init__(self):
+            self.calls = 0
+
+        def sample(self):
+            self.calls += 1
+            return 42
+
+    accs = [MockClient("prime"), MockClient("acc2")]
+    cfg = make_cfg(use_limit=True)
+    duration = CountingDuration()
+    object.__setattr__(cfg, "trade_duration", duration)
+    strategy = DeltaStrategy(cfg, accs)
+    strategy.initial_bal = Decimal("2000")
+    calls: list[str] = []
+    close_calls: list[bool] = []
+    legs = [
+        DeltaLeg(cast(TradingClient, accs[0]), "bid", Decimal("50")),
+        DeltaLeg(cast(TradingClient, accs[1]), "ask", Decimal("50")),
+    ]
+    summary = DeltaTradeSummary(
+        symbol="BTC",
+        total_pnl=Decimal("1"),
+        total_entry_cost=Decimal("100"),
+        combined_roi=Decimal("0.01"),
+        max_abs_leg_roi=Decimal("0.01"),
+        leg_count=2,
+        open_leg_count=2,
+        has_size_drift=False,
+        roi_breach=False,
+        healthy=True,
+    )
+    trade = FakeTrade("BTC", summary, calls, close_calls, legs)
+
+    async def fake_plan(*args, **kwargs):
+        return [trade]
+
+    async def fake_monitor(self, trades, monitor_duration):
+        calls.append(f"monitor:{monitor_duration}")
+        return True
+
+    monkeypatch.setattr("strategy.cycle.plan_delta_trades", fake_plan)
+    monkeypatch.setattr("strategy.cycle.random.sample", lambda seq, n: list(seq)[:n])
+    monkeypatch.setattr(DeltaStrategy, "monitor_trades", fake_monitor)
+
+    await strategy.trade_cycle()
+
+    assert duration.calls == 1
+    assert "monitor:42" in calls
 
 
 async def test_cycle_skips_when_no_valid_pair():
@@ -471,7 +715,7 @@ async def test_cycle_uses_trade_objects_and_limit_close(monkeypatch):
     async def fake_plan(*args, **kwargs):
         return [trade]
 
-    async def fake_monitor(self, trades):
+    async def fake_monitor(self, trades, duration):
         calls.append("monitor")
         return True
 

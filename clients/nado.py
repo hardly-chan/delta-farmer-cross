@@ -96,6 +96,12 @@ def _build_appendix(order_type=0, reduce_only=False, isolated=False, isolated_ma
     return v
 
 
+class MarketHours(BaseModel):
+    is_open: bool
+    next_close: datetime | None = None
+    next_open: datetime | None = None
+
+
 class SymbolInfo(BaseModel):
     product_id: int
     symbol: str
@@ -103,6 +109,8 @@ class SymbolInfo(BaseModel):
     price_increment: Decimal
     min_size: Decimal
     isolated_only: bool = False
+    trading_status: str = "live"
+    market_hours: MarketHours | None = None
 
 
 class NadoTrade(BaseModel):
@@ -208,7 +216,7 @@ class NadoClient:
         return "0x" + self.account.sign_message(msg).signature.hex()
 
     def _make_nonce(self) -> int:
-        # recv_time = now + 90s: matches official SDK default, leaves 10s tolerance vs server's 100s max.
+        # Server allows recv_time up to 100s ahead; use 90s to keep a 10s safety margin.
         # https://github.com/nadohq/nado-python-sdk/blob/v0.3.5/nado_protocol/utils/nonce.py
         ts_ms = int(time.time() * 1000)
         return ((ts_ms + 90_000) << 20) + random.randint(0, (1 << 20) - 1)
@@ -252,21 +260,26 @@ class NadoClient:
         bid, ask = await self.get_bbo(symbol)
         return (bid + ask) / 2
 
-    @ttl_cache(3600)
+    @ttl_cache(600)
     async def symbols(self) -> list[SymbolInfo]:
-        items = await self._query({"type": "symbols"})
-        items = list(items.get("symbols", {}).values())
+        rep = await self.http.request("GET", "https://archive.prod.nado.xyz/v2/symbols")
+        if not rep.ok:
+            raise ApiError("Symbols error", rep)
+
+        items = rep.json()
 
         return [
             SymbolInfo(
                 product_id=x["product_id"],
-                symbol=x["symbol"].removesuffix("-PERP"),
+                symbol=symbol.removesuffix("-PERP"),
                 size_increment=_from_x18(x["size_increment"]),
                 price_increment=_from_x18(x["price_increment_x18"]),
                 min_size=_from_x18(x["min_size"]),
                 isolated_only=bool(x.get("isolated_only", False)),
+                trading_status=x.get("trading_status", "live"),
+                market_hours=x.get("market_hours"),
             )
-            for x in items
+            for symbol, x in items.items()
         ]
 
     @ttl_cache(3600)
@@ -283,6 +296,20 @@ class NadoClient:
                 return sym
 
         raise ApiError(f"Symbol not found: symbol={symbol} product_id={product_id}")
+
+    async def is_symbol_tradeable(self, symbol: str, at: datetime, reduce_only=False) -> bool:
+        sym = await self.symbol_info(symbol=symbol)
+        if sym.trading_status == "not_tradable":
+            return False
+        if reduce_only and sym.trading_status == "post_only":
+            return False
+        if sym.market_hours is None:
+            return True
+
+        nc = sym.market_hours.next_close
+        no = sym.market_hours.next_open
+
+        return (no is None or at >= no) and (nc is None or at < nc)
 
     async def get_lot_size(self, symbol: str) -> Decimal:
         sym = await self.symbol_info(symbol=symbol)
@@ -328,7 +355,7 @@ class NadoClient:
         qty: Decimal,
         price: Decimal,
         order_type: int,  # 0=DEFAULT, 1=IOC
-        reduce_only: bool = False,
+        reduce_only=False,
     ) -> Order:
         exp = int(time.time()) + (30 if order_type == 1 else 3600)
         sym = await self.symbol_info(symbol=symbol)

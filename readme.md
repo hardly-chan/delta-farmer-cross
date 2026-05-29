@@ -181,8 +181,8 @@ All settings live in your `configs/<app>.toml` file. Here is every available par
 | Parameter           | Default  | Description                                                                                                                                              |
 | ------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `leverage`          | `10`     | Leverage multiplier (1–49). Set it to the **lowest** max leverage across all your chosen symbols.                                                        |
-| `symbols`           | required | Trading pairs, e.g. `["BTC"]` or `["BTC", "ETH"]`. Check the exchange UI for available symbols.                                                          |
-| `symbols_per_trade` | `1`      | How many symbols to trade per cycle. `1` = classic mode; `2`–`4` = basket mode. Must match the length of `symbols`.                                      |
+| `symbols`           | required | Candidate trading pairs, e.g. `["BTC"]` or `["BTC", "ETH"]`. Check the exchange UI for available symbols.                                                |
+| `symbols_per_trade` | `1`      | How many currently tradeable symbols to sample per cycle. `1` = classic mode; `2`–`4` = basket mode. Must be no larger than `symbols`.                    |
 | `use_limit`         | `false`  | If `true`, the prime account opens with a limit order instead of a market order — reduces fees.                                                          |
 | `first_as_prime`    | `false`  | If `true`, the first account in the list is always the prime (limit-side). If `false`, it rotates randomly each cycle. Ignored when `group_size` is set. |
 
@@ -277,7 +277,8 @@ trade_size_usd = { min = 140, max = 160 }
 
 Rules:
 
-- `symbols_per_trade` must exactly match the number of entries in `symbols`
+- `symbols` is the candidate pool; `symbols_per_trade` is how many currently tradeable symbols are selected per cycle
+- Configure at least `symbols_per_trade` symbols, and add alternatives for market-hour assets so cycles do not skip when too few markets are open
 - Maximum 4 symbols per trade
 - Safety exits apply both per-position and combined basket ROI
 
@@ -300,6 +301,8 @@ Rules:
 ---
 
 ## Safety Checks
+
+Before opening a cycle, the bot filters the configured `symbols` pool to markets that are tradeable for the planned entry and close window on every selected account. Nado stock and commodity markets use exchange market-hours and trading-status data; if fewer than `symbols_per_trade` symbols are available, the cycle logs a warning and waits for the next cooldown instead of opening trades. Symbols without market-hours metadata are treated as 24/7.
 
 Every `trade_heartbeat` interval (default 15 seconds), the bot checks:
 

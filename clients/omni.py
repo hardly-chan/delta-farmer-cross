@@ -141,6 +141,9 @@ class OmniClient:
         items = [x for x in res if x.get("instrument_type") == "perpetual_future"]
         return [x["underlying"] for x in items]
 
+    async def is_symbol_tradeable(self, symbol: str, at: datetime, reduce_only=False) -> bool:
+        return True
+
     async def _quote(self, asset: str, qty: Decimal | int | float) -> IndicativeQuote:
         pld = {
             "instrument": {

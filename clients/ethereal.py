@@ -212,6 +212,9 @@ class EtherealClient:
     async def get_symbols(self) -> list[str]:
         return [s.symbol for s in await self.symbols()]
 
+    async def is_symbol_tradeable(self, symbol: str, at: datetime, reduce_only=False) -> bool:
+        return True
+
     # MARK: Prices
 
     @ttl_cache(5)

@@ -162,6 +162,9 @@ class OnyxClient(HyperLiquidClient):
         explicit = {s for s in self._symbols if s.startswith("hyna:")}
         return [p for p in positions if not p.symbol.startswith("hyna:") or p.symbol in explicit]
 
+    async def is_symbol_tradeable(self, symbol: str, at: datetime, reduce_only=False) -> bool:
+        return True
+
     @classmethod
     def __type_check(cls) -> type[TradingClient]:
         return OnyxClient
