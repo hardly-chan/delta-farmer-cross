@@ -2,10 +2,11 @@
 # Copyright (c) vladkens | MIT License | Sleep is overrated anyway
 import os
 import sys
+from datetime import datetime, timedelta
 
 from loguru import logger
 
-__all__ = ["logger"]
+__all__ = ["enable_file_logging", "logger"]
 
 logger.level("TRACE", icon=".")
 logger.level("DEBUG", icon="·")
@@ -52,5 +53,28 @@ def formatter(record):
 
 # https://github.com/Delgan/loguru/blob/0.7.3/loguru/_defaults.py#L32-L38
 level = (os.environ.get("LOGURU_LEVEL") or "DEBUG").upper()
+
 logger.remove()
 logger.add(sys.stderr, format=formatter, level=level)
+
+
+def enable_file_logging(app_name: str) -> str | None:
+    started_at = datetime.now()
+
+    try:
+        os.makedirs("logs", exist_ok=True)
+        filepath = _log_filepath(app_name, started_at)
+        if os.path.exists(filepath):
+            filepath = _log_filepath(app_name, started_at + timedelta(seconds=1))
+
+        logger.add(filepath, format=formatter, level=level, encoding="utf-8", colorize=False)
+    except OSError as e:
+        logger.warning(f"Failed to initialize file logging: {e}")
+        return None
+
+    return filepath
+
+
+def _log_filepath(app_name: str, started_at: datetime) -> str:
+    timestamp = started_at.strftime("%Y%m%d-%H%M%S")
+    return os.path.join("logs", f"{timestamp}-{app_name}.log")

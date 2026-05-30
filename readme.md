@@ -170,6 +170,15 @@ uv run apps/<app>.py config decrypt        # Decrypt to view raw keys
 uv run apps/<app>.py --help
 ```
 
+### Logs
+
+By default, logs are printed only to the terminal. For trading runs, set
+`DF_LOG_FILE=1` to also write logs to `logs/<timestamp>-<app>.log`:
+
+```bash
+DF_LOG_FILE=1 uv run apps/<app>.py trade
+```
+
 ### Weekly summary
 
 `scripts/weekly.py` reads cached stats from `.cache`. Refresh exchange data first with

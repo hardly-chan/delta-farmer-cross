@@ -17,7 +17,7 @@ from . import telegram as tg
 from . import telemetry
 from .crypto import config_cli_parser
 from .errors import AppError
-from .logger import logger
+from .logger import enable_file_logging, logger
 from .models import AccountConfig
 from .proxy import print_proxies
 from .telegram import TgConfig
@@ -26,6 +26,10 @@ from .update import latest_release_notice
 
 def eprint(*args, **kwargs):
     print(*args, **kwargs, file=sys.stderr)
+
+
+def _env_enabled(name: str) -> bool:
+    return (os.environ.get(name) or "").lower() in ("1", "true", "yes", "on")
 
 
 class HelpFormatter(argparse.HelpFormatter):
@@ -189,6 +193,9 @@ async def create_cli(name: str, config_path: str, sec_fields: list[str]) -> argp
     if args.command is None:
         cli.print_help()
         exit(1)
+
+    if args.command == "trade" and _env_enabled("DF_LOG_FILE"):
+        enable_file_logging(name)
 
     if args.command == "config":
         handle_config(args)
