@@ -1,6 +1,7 @@
 # delta-farmer | https://github.com/vladkens/delta-farmer
 # Copyright (c) vladkens | MIT License | If it compiles, ship it
 import asyncio
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, Self
@@ -14,6 +15,7 @@ from lib.http import ApiError, AsyncHttp, HttpMethod
 from lib.logger import logger
 from lib.models import AccountConfig
 from strategy import Order, OrderBook, OrderStatus, Position, ProfileInfo, Side, TradingClient
+from strategy.execution import EntryQuality
 
 API_URL = "https://omni.variational.io/api"
 APP_URL = "https://omni.variational.io"
@@ -178,6 +180,33 @@ class OmniClient:
         bids = [(q.bid, q.qty) for q in quotes]
         asks = [(q.ask, q.qty) for q in quotes]
         return OrderBook.build(bids=bids, asks=asks)
+
+    async def estimate_entry_quality(
+        self, symbol: str, legs: Sequence[tuple[Side, Decimal]]
+    ) -> EntryQuality:
+        bid_qty = sum((qty for side, qty in legs if side == "bid"), Decimal(0))
+        ask_qty = sum((qty for side, qty in legs if side == "ask"), Decimal(0))
+        quote_qty = max(bid_qty, ask_qty)
+        if quote_qty <= 0:
+            return EntryQuality(None, None, None)
+
+        quote = await self._quote(symbol, quote_qty)
+        avg_bid_price = quote.ask if bid_qty else None
+        avg_ask_price = quote.bid if ask_qty else None
+        entry_spread_pct = (
+            abs(avg_ask_price - avg_bid_price) / avg_ask_price * 100
+            if avg_bid_price is not None and avg_ask_price is not None and avg_ask_price > 0
+            else None
+        )
+        return EntryQuality(
+            avg_bid_price=avg_bid_price,
+            avg_ask_price=avg_ask_price,
+            entry_spread_pct=entry_spread_pct,
+            bid_qty=bid_qty,
+            ask_qty=ask_qty,
+            bid_depth=quote.qty,
+            ask_depth=quote.qty,
+        )
 
     async def get_price(self, symbol: str) -> Decimal:
         return (await self._quote(symbol, 1)).mark_price

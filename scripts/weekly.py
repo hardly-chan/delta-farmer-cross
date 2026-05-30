@@ -732,9 +732,7 @@ def main() -> int:
     if rc == 0:
         print("\033[2m  · cached data — run stats <exchange> to refresh\033[0m")
         if not args.exchange and not args.burn:
-            print(
-                "\033[2m  · periods selected by protocol end ISO week\033[0m"
-            )
+            print("\033[2m  · periods selected by protocol end ISO week\033[0m")
     return rc
 
 

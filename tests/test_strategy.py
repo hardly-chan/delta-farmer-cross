@@ -11,6 +11,7 @@ import pytest
 from lib.logger import logger
 from strategy.cycle import DeltaStrategy
 from strategy.execution import (
+    EntryQuality,
     _simulate_book_fill,
     evaluate_entry_quality,
     fill_limit_order,
@@ -1518,6 +1519,31 @@ async def test_wait_for_entry_quality_returns_immediately_when_quality_ok():
     assert result.entry_spread_pct == Decimal("0.004000080001600032000640012800")
 
 
+async def test_wait_for_entry_quality_uses_client_estimator():
+    class EstimatingClient(MockClient):
+        async def estimate_entry_quality(self, symbol: str, legs: list[tuple[Side, Decimal]]):
+            self._rec("estimate_entry_quality")
+            return EntryQuality(
+                avg_bid_price=Decimal("101"),
+                avg_ask_price=Decimal("99"),
+                entry_spread_pct=Decimal("2"),
+            )
+
+    a = EstimatingClient("a")
+
+    result = await wait_for_entry_quality(
+        a,
+        "ETH",
+        [("bid", Decimal("1")), ("ask", Decimal("1"))],
+        make_cfg(max_entry_spread_pct=3),
+    )
+
+    assert result is not None
+    assert result.entry_spread_pct == Decimal("2")
+    assert "estimate_entry_quality" in a.calls
+    assert "get_order_book" not in a.calls
+
+
 async def test_wait_for_entry_quality_polls_until_quality_ok(monkeypatch):
     a = MockClient("a")
     monkeypatch.setattr("strategy.execution.asyncio.sleep", _instant_sleep)
@@ -1559,3 +1585,69 @@ async def test_wait_for_entry_quality_times_out(monkeypatch):
     )
 
     assert result is None
+
+
+async def test_wait_for_entry_quality_logs_insufficient_depth(monkeypatch):
+    a = MockClient("a")
+    logs: list[str] = []
+    sink_id = logger.add(lambda msg: logs.append(str(msg)), format="{message}", level="DEBUG")
+
+    async def shallow_book(symbol: str):
+        return make_book([("99", "0.5")], [("101", "0.25")])
+
+    a.get_order_book = shallow_book  # type: ignore[method-assign]
+
+    try:
+        result = await wait_for_entry_quality(
+            a,
+            "ETH",
+            [("bid", Decimal("1")), ("ask", Decimal("2"))],
+            make_cfg(max_entry_spread_pct=0.10, entry_gate_wait=0),
+        )
+    finally:
+        logger.remove(sink_id)
+
+    assert result is None
+    assert any(
+        "ETH gate waiting spread=n/a reason=insufficient asks depth 0.25/1, "
+        "bids depth 0.5/2" in message
+        for message in logs
+    )
+    assert any(
+        "ETH gate skip spread=n/a reason=insufficient asks depth 0.25/1, "
+        "bids depth 0.5/2 timeout=0s" in message
+        for message in logs
+    )
+
+
+async def test_omni_estimates_entry_quality_from_trade_size_quote():
+    from clients.omni import OmniClient
+
+    class Quote:
+        bid = Decimal("99")
+        ask = Decimal("101")
+
+        def __init__(self, qty: Decimal):
+            self.qty = qty
+
+    client = object.__new__(OmniClient)
+    quote_calls: list[Decimal] = []
+
+    async def quote(symbol: str, qty: Decimal):
+        quote_qty = Decimal(str(qty))
+        quote_calls.append(quote_qty)
+        return Quote(quote_qty)
+
+    client._quote = quote  # type: ignore[method-assign]
+
+    result = await client.estimate_entry_quality(
+        "ETH",
+        [("bid", Decimal("0.56773")), ("ask", Decimal("0.56773"))],
+    )
+
+    assert quote_calls == [Decimal("0.56773")]
+    assert result.avg_bid_price == Decimal("101")
+    assert result.avg_ask_price == Decimal("99")
+    assert result.entry_spread_pct == Decimal("2") / Decimal("99") * 100
+    assert result.bid_depth == Decimal("0.56773")
+    assert result.ask_depth == Decimal("0.56773")

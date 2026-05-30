@@ -5,6 +5,7 @@ import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Protocol, runtime_checkable
 
 from lib.errors import AppError
 from lib.logger import logger
@@ -26,6 +27,30 @@ class EntryQuality:
     avg_bid_price: Decimal | None
     avg_ask_price: Decimal | None
     entry_spread_pct: Decimal | None
+    bid_qty: Decimal = Decimal(0)
+    ask_qty: Decimal = Decimal(0)
+    bid_depth: Decimal = Decimal(0)
+    ask_depth: Decimal = Decimal(0)
+
+    @property
+    def unavailable_reason(self) -> str | None:
+        missing = []
+        if self.bid_qty > 0 and self.avg_bid_price is None:
+            missing.append(f"asks depth {self.ask_depth}/{self.bid_qty}")
+        if self.ask_qty > 0 and self.avg_ask_price is None:
+            missing.append(f"bids depth {self.bid_depth}/{self.ask_qty}")
+        if missing:
+            return "insufficient " + ", ".join(missing)
+        if self.entry_spread_pct is None:
+            return "spread unavailable"
+        return None
+
+
+@runtime_checkable
+class EntryQualityEstimator(Protocol):
+    async def estimate_entry_quality(
+        self, symbol: str, legs: Sequence[tuple[Side, Decimal]]
+    ) -> EntryQuality: ...
 
 
 def _simulate_book_fill(levels: list[OrderBookLevel], qty: Decimal) -> Decimal | None:
@@ -55,6 +80,8 @@ def evaluate_entry_quality(
 ) -> EntryQuality:
     bid_qty = sum((qty for side, qty in legs if side == "bid"), Decimal(0))
     ask_qty = sum((qty for side, qty in legs if side == "ask"), Decimal(0))
+    bid_depth = sum((level.size for level in order_book.bids), Decimal(0))
+    ask_depth = sum((level.size for level in order_book.asks), Decimal(0))
 
     avg_bid_price = _simulate_book_fill(order_book.asks, bid_qty) if bid_qty else None
     avg_ask_price = _simulate_book_fill(order_book.bids, ask_qty) if ask_qty else None
@@ -68,6 +95,10 @@ def evaluate_entry_quality(
         avg_bid_price=avg_bid_price,
         avg_ask_price=avg_ask_price,
         entry_spread_pct=entry_spread_pct,
+        bid_qty=bid_qty,
+        ask_qty=ask_qty,
+        bid_depth=bid_depth,
+        ask_depth=ask_depth,
     )
 
 
@@ -87,8 +118,16 @@ async def wait_for_entry_quality(
     def fmt(x: Decimal | None) -> str:
         return f"{x:.2f}%" if x is not None else "n/a"
 
+    def gate_msg(prefix: str, quality: EntryQuality) -> str:
+        reason = quality.unavailable_reason
+        detail = f" reason={reason}" if reason else ""
+        return f"{symbol} gate {prefix} spread={fmt(quality.entry_spread_pct)}{detail}"
+
     while True:
-        quality = evaluate_entry_quality(await client.get_order_book(symbol), legs)
+        if isinstance(client, EntryQualityEstimator):
+            quality = await client.estimate_entry_quality(symbol, legs)
+        else:
+            quality = evaluate_entry_quality(await client.get_order_book(symbol), legs)
         last_quality = quality
         if (
             quality.entry_spread_pct is not None
@@ -97,13 +136,13 @@ async def wait_for_entry_quality(
             return quality
 
         if not warned:
-            log.info(f"{symbol} gate no spread={fmt(quality.entry_spread_pct)}, waiting...")
+            log.debug(gate_msg("waiting", quality))
             warned = True
 
         remaining = deadline - time.time()
         if remaining <= 0:
-            spread = fmt(last_quality.entry_spread_pct if last_quality else None)
-            log.info(f"{symbol} gate skip spread={spread} timeout={timeout:.0f}s")
+            msg = gate_msg("skip", last_quality) if last_quality else f"{symbol} gate skip"
+            log.debug(f"{msg} timeout={timeout:.0f}s")
             return None
 
         await asyncio.sleep(min(poll_interval, remaining))
