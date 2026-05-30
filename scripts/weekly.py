@@ -10,6 +10,7 @@ Usage:
   uv run scripts/weekly.py              # snapshot: all exchanges, latest week
   uv run scripts/weekly.py -1           # snapshot: one week back
   uv run scripts/weekly.py -e Hyena     # Hyena: all periods (vol/burn/pts)
+  uv run scripts/weekly.py --bonus      # include OFF/retro bonus points in totals
   uv run scripts/weekly.py --burn       # burn pivot: all exchanges × ISO weeks
 """
 
@@ -180,7 +181,10 @@ def onyx_stats() -> Stats:
             lbl = OnyxClient.to_week_label(dt)
             vol, burn = out.get(lbl, (Decimal(0), Decimal(0)))
             vol += Decimal(str(r["px"])) * Decimal(str(r["sz"]))
-            out[lbl] = (vol, burn - Decimal(str(r.get("closedPnl", 0))))
+            out[lbl] = (
+                vol,
+                burn - Decimal(str(r.get("closedPnl", 0))) + Decimal(str(r.get("fee", 0))),
+            )
     return out
 
 
@@ -414,6 +418,53 @@ BURN_EXCHANGES = [
 ]
 
 
+def _period_end_weeks(label: str) -> set[str]:
+    m = re.match(r"^(?:OFF|W\d+)\s+[A-Z][a-z]{2}\d{2}-([A-Z][a-z]{2})(\d{2})$", label)
+    if not m:
+        return set()
+
+    mon, day = m.groups()
+    now_year = datetime.now(UTC).year
+    weeks: set[str] = set()
+    for year in (now_year - 1, now_year, now_year + 1):
+        try:
+            dt = datetime.strptime(f"{year} {mon}{day}", "%Y %b%d").replace(tzinfo=UTC)
+        except ValueError:
+            continue
+        weeks.add(_to_iso_week(dt))
+    return weeks
+
+
+def _label_in_weeks(label: str, from_week: str | None, to_week: str | None) -> bool:
+    end_weeks = _period_end_weeks(label)
+    if not end_weeks:
+        return from_week is None and to_week is None
+    return any(
+        (not from_week or week >= from_week) and (not to_week or week <= to_week)
+        for week in end_weeks
+    )
+
+
+def _report_weeks() -> set[str]:
+    weeks: set[str] = set()
+    current_week = _to_iso_week(datetime.now(UTC))
+    for _, stats_fn, pts_fn, _ in EXCHANGES:
+        for label in set(stats_fn()) | set(pts_fn()):
+            weeks |= {week for week in _period_end_weeks(label) if week <= current_week}
+    return weeks
+
+
+def bonus_pts(pts_map: Pts, selected_labels: set[str]) -> Decimal:
+    return sum(
+        (
+            points
+            for label, points in pts_map.items()
+            if label.startswith("OFF ") and label not in selected_labels
+        ),
+        Decimal(0),
+    )
+
+
 def _iso_label(iso_week: str) -> str:
     year, week = int(iso_week[:4]), int(iso_week[6:])
     jan4 = datetime(year, 1, 4, tzinfo=UTC)
@@ -439,7 +490,7 @@ def _parse_period_arg(s: str) -> int | str:
 
 
 def _offset_week(week_arg: int) -> str | None:
-    weeks = sorted({w for _, fn in BURN_EXCHANGES for w in fn()})
+    weeks = sorted(_report_weeks())
     if not weeks:
         return None
     idx = len(weeks) - 1 + week_arg
@@ -503,8 +554,9 @@ def report_view(
     to_week: str | None = None,
     *,
     detail: bool = False,
+    include_bonus: bool = False,
 ) -> int:
-    """Project report over selected ISO-week range."""
+    """Project report over protocol periods selected by end ISO-week."""
     from_week, to_week = _selected_weeks(week_arg, from_week, to_week)
     tbl = AutoTable(
         *_report_columns(grouped=detail),
@@ -512,26 +564,40 @@ def report_view(
     )
     any_data = False
 
-    for name, fn in BURN_EXCHANGES:
-        data = fn()
-        weeks = sorted(
-            w
-            for w in data
-            if (not from_week or w >= from_week)
-            and (not to_week or w <= to_week)
-            and any(v != 0 for v in data[w])
+    for name, stats_fn, pts_fn, _ in EXCHANGES:
+        periods = stats_fn()
+        pts_map = pts_fn()
+        labels = sorted(
+            label
+            for label in set(periods) | set(pts_map)
+            if _label_in_weeks(label, from_week, to_week)
+            and (
+                any(v != 0 for v in periods.get(label, (Decimal(0), Decimal(0))))
+                or pts_map.get(label, Decimal(0)) != 0
+            )
         )
-        if not weeks:
+        extra_pts = bonus_pts(pts_map, set(labels)) if include_bonus else Decimal(0)
+        if not labels and not extra_pts:
             continue
 
         if detail:
             tbl.subgroup(name)
-            for w in weeks:
-                tbl.add_row(_iso_label(w), *data[w])
+            for label in labels:
+                vol, burn = periods.get(label, (Decimal(0), Decimal(0)))
+                pts = pts_map.get(label, Decimal(0))
+                tbl.add_row(label, vol, burn, pts)
+            if extra_pts:
+                tbl.add_row("Bonus", Decimal(0), Decimal(0), extra_pts)
         else:
-            vol = sum((data[w][0] for w in weeks), Decimal(0))
-            burn = sum((data[w][1] for w in weeks), Decimal(0))
-            pts = sum((data[w][2] for w in weeks), Decimal(0))
+            vol = sum(
+                (periods.get(label, (Decimal(0), Decimal(0)))[0] for label in labels),
+                Decimal(0),
+            )
+            burn = sum(
+                (periods.get(label, (Decimal(0), Decimal(0)))[1] for label in labels),
+                Decimal(0),
+            )
+            pts = sum((pts_map.get(label, Decimal(0)) for label in labels), Decimal(0)) + extra_pts
             tbl.add_row(name, vol, burn, pts)
         any_data = True
 
@@ -645,6 +711,12 @@ def main() -> int:
         help="to ISO week, e.g. W21",
     )
     parser.add_argument("--burn", action="store_true", help="burn pivot: all exchanges × ISO weeks")
+    parser.add_argument(
+        "--bonus",
+        "--include-bonus",
+        action="store_true",
+        help="include approximate OFF/retro bonus points in selected report totals",
+    )
     args = parser.parse_args()
 
     if args.burn:
@@ -655,10 +727,14 @@ def main() -> int:
         week_arg = args.week if isinstance(args.week, int) else None
         from_week = args.from_week or (args.week if isinstance(args.week, str) else None)
         to_week = args.to_week or (args.week if isinstance(args.week, str) else None)
-        rc = report_view(week_arg, from_week, to_week, detail=args.detail)
+        rc = report_view(week_arg, from_week, to_week, detail=args.detail, include_bonus=args.bonus)
 
     if rc == 0:
         print("\033[2m  · cached data — run stats <exchange> to refresh\033[0m")
+        if not args.exchange and not args.burn:
+            print(
+                "\033[2m  · periods selected by protocol end ISO week\033[0m"
+            )
     return rc
 
 
