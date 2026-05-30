@@ -616,8 +616,8 @@ async def test_tradeable_symbols_budgets_sequential_limit_baskets(monkeypatch):
     assert all(
         checks
         == [
-            (base + timedelta(seconds=125), False),
-            (base + timedelta(seconds=235), True),
+            (base + timedelta(seconds=1205), False),
+            (base + timedelta(seconds=2035), True),
         ]
         for checks in checks_by_symbol.values()
     )

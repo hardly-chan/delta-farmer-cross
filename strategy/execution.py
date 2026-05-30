@@ -309,9 +309,6 @@ async def fill_limit_order(
                 client, order, side, symbol, reduce_only, use_market_fallback, timeout
             )
 
-        if msg := wait.waiting_log(order, side, qty, symbol):
-            log.debug(msg)
-
 
 # MARK: Execution primitives
 
