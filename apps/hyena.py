@@ -7,7 +7,7 @@ from decimal import Decimal
 from typing import TypeVar
 
 from clients.hyena import HyenaClient
-from clients.hyperliquid import warn_legacy_hyperliquid_accounts
+from clients.hyperliquid import migrate_hyperliquid_accounts, warn_legacy_hyperliquid_accounts
 from lib.cli import create_cli, run_app
 from lib.store import DataStore
 from lib.table import AutoTable, Column, PeriodRow, render_stats
@@ -130,7 +130,9 @@ async def print_stats(
 
 
 async def main():
-    cli = await create_cli("hyena", "configs/hyena.toml", ["privkey"])
+    cli = await create_cli(
+        "hyena", "configs/hyena.toml", ["privkey"], custom_commands={"migrate": lambda _: None}
+    )
     cfg = StrategyConfig.load(cli.config)
     cfg.symbols = _normalize_symbols(cfg.symbols)
 
@@ -146,6 +148,8 @@ async def main():
             await print_stats(all_accs, period=cli.group, filter_period=cli.filter, force=cli.force)
         case "close":
             await close_all(act_accs)
+        case "migrate":
+            await migrate_hyperliquid_accounts(all_accs, "Hyena")
         case "trade":
             await run_groups(cfg, act_accs)
 

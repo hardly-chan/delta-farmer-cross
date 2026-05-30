@@ -13,6 +13,7 @@ import msgpack
 from eth_account.messages import encode_typed_data
 from eth_account.signers.local import LocalAccount
 from eth_utils.crypto import keccak
+from rich import print as rprint
 
 from lib import utils
 from lib.decorators import bind_log_context, ttl_cache
@@ -39,6 +40,26 @@ _AGENT_TYPES = {
     "Agent": [
         {"name": "source", "type": "string"},
         {"name": "connectionId", "type": "bytes32"},
+    ],
+}
+_USER_SIGN_DOMAIN = {
+    "name": "HyperliquidSignTransaction",
+    "version": "1",
+    "chainId": 42161,
+    "verifyingContract": "0x0000000000000000000000000000000000000000",
+}
+_USER_SET_ABSTRACTION_TYPES = {
+    "EIP712Domain": [
+        {"name": "name", "type": "string"},
+        {"name": "version", "type": "string"},
+        {"name": "chainId", "type": "uint256"},
+        {"name": "verifyingContract", "type": "address"},
+    ],
+    "HyperliquidTransaction:UserSetAbstraction": [
+        {"name": "hyperliquidChain", "type": "string"},
+        {"name": "user", "type": "address"},
+        {"name": "abstraction", "type": "string"},
+        {"name": "nonce", "type": "uint64"},
     ],
 }
 
@@ -140,6 +161,16 @@ class HyperLiquidClient:
         signed = self.account.sign_message(encode_typed_data(full_message=payload))
         r, s, v = signed.r, signed.s, signed.v
         return {"r": f"0x{r:064x}", "s": f"0x{s:064x}", "v": v}
+
+    def _sign_user_set_abstraction(self, msg: dict) -> dict:
+        payload = {
+            "types": _USER_SET_ABSTRACTION_TYPES,
+            "domain": _USER_SIGN_DOMAIN,
+            "primaryType": "HyperliquidTransaction:UserSetAbstraction",
+            "message": msg,
+        }
+        signed = self.account.sign_message(encode_typed_data(full_message=payload))
+        return {"r": f"0x{signed.r:064x}", "s": f"0x{signed.s:064x}", "v": signed.v}
 
     _builder: dict | None = None  # set by subclass to include builder fee in orders
 
@@ -279,6 +310,37 @@ class HyperLiquidClient:
             return "unknown"
 
         return data if isinstance(data, str) else "unknown"
+
+    async def set_account_mode(self, mode: str = "unifiedAccount") -> None:
+        if mode not in ("disabled", "unifiedAccount", "portfolioMargin"):
+            raise ValueError(f"unsupported account mode: {mode}")
+
+        nonce = int(time.time() * 1000)
+        msg = {
+            "hyperliquidChain": "Mainnet",
+            "user": self.address.lower(),
+            "abstraction": mode,
+            "nonce": nonce,
+        }
+        action = {
+            "type": "userSetAbstraction",
+            "hyperliquidChain": msg["hyperliquidChain"],
+            "signatureChainId": "0xa4b1",
+            "user": msg["user"],
+            "abstraction": msg["abstraction"],
+            "nonce": nonce,
+        }
+        payload = {
+            "action": action,
+            "nonce": nonce,
+            "signature": self._sign_user_set_abstraction(msg),
+        }
+        rep = await self.http.request("POST", "/exchange", json=payload)
+        if not rep.ok:
+            raise ApiError("Exchange error", rep)
+        res = rep.json()
+        if res.get("status") != "ok":
+            raise ApiError(f"Exchange rejected: {res}")
 
     async def get_leverage(self, symbol: str) -> int | None:
         dex, coin = self._resolve(symbol)
@@ -501,7 +563,28 @@ def warn_legacy_hyperliquid_accounts(accounts: Sequence[str], app_name: str) -> 
         return
 
     names = ", ".join(accounts)
-    logger.warning(
-        f"Hyperliquid Unified Account is recommended. "
-        f"Migrate these accounts in {app_name}/Hyperliquid UI before trading: {names}"
+    command = f"uv run apps/{app_name.lower()}.py migrate"
+    rprint(
+        "[cyan]*[/cyan] Hyperliquid Unified Account is recommended. "
+        f"Migrate these accounts before trading: {names}. "
+        f"Run [cyan]{command}[/cyan] or use {app_name}/Hyperliquid UI."
     )
+
+
+async def migrate_hyperliquid_accounts(accs: Sequence[HyperLiquidClient], app_name: str) -> None:
+    modes = await asyncio.gather(*[acc.account_mode() for acc in accs])
+    todo = [(acc, mode) for acc, mode in zip(accs, modes) if mode != "unifiedAccount"]
+    if not todo:
+        logger.info("All accounts are already using Hyperliquid Unified Account")
+        return
+
+    names = ", ".join(acc.name for acc, _ in todo)
+    logger.warning(f"Migrating {app_name} accounts to Hyperliquid Unified Account: {names}")
+    results = await asyncio.gather(
+        *[acc.set_account_mode("unifiedAccount") for acc, _ in todo], return_exceptions=True
+    )
+    for (acc, old_mode), res in zip(todo, results):
+        if isinstance(res, Exception):
+            logger.error(f"{acc.name}: migration failed from {old_mode!r}: {res}")
+        else:
+            logger.success(f"{acc.name}: migrated from {old_mode!r} to 'unifiedAccount'")

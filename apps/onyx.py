@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TypeVar
 
-from clients.hyperliquid import warn_legacy_hyperliquid_accounts
+from clients.hyperliquid import migrate_hyperliquid_accounts, warn_legacy_hyperliquid_accounts
 from clients.onyx import OnyxClient, OnyxPoint
 from lib.cli import create_cli, run_app
 from lib.store import DataStore
@@ -143,7 +143,9 @@ async def print_stats(
 
 
 async def main():
-    cli = await create_cli("onyx", "configs/onyx.toml", ["privkey"])
+    cli = await create_cli(
+        "onyx", "configs/onyx.toml", ["privkey"], custom_commands={"migrate": lambda _: None}
+    )
     cfg = StrategyConfig.load(cli.config)
 
     accs = [(OnyxClient.from_config(x), x.enabled) for x in cfg.accounts]
@@ -158,6 +160,8 @@ async def main():
             await print_positions(act_accs)
         case "close":
             await close_all(act_accs)
+        case "migrate":
+            await migrate_hyperliquid_accounts(all_accs, "Onyx")
         case "stats":
             await print_stats(all_accs, period=cli.group, filter_period=cli.filter, force=cli.force)
         case "trade":
