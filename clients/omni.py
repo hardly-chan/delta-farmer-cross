@@ -38,6 +38,14 @@ class PointsInfo(BaseModel):
     rank: int | None = None
 
 
+class OmniSupportedAsset(BaseModel):
+    asset: str
+    has_perp: bool = False
+    instrument_type: str | None = None
+    asset_class: str | None = None
+    is_close_only_mode: bool = False
+
+
 class OmniOrder(BaseModel):
     id: str = Field(validation_alias="rfq_id")
     created_at: datetime
@@ -142,24 +150,49 @@ class OmniClient:
         res = await self._call("GET", "/portfolio?compute_margin=true")
         return Decimal(res["balance"])
 
+    @ttl_cache(600)
+    async def supported_assets(self) -> dict[str, OmniSupportedAsset]:
+        res = await self._call("GET", "/metadata/supported_assets")
+        items: dict[str, OmniSupportedAsset] = {}
+        for asset, variants in res.items():
+            if not variants:
+                continue
+            item = OmniSupportedAsset(**variants[0])
+            items[asset] = item
+        return items
+
+    async def _instrument(self, symbol: str) -> dict[str, Any]:
+        assets = await self.supported_assets()
+        asset = assets.get(symbol)
+        if asset and asset.instrument_type == "perpetual_rwa_future":
+            return {
+                "underlying": symbol,
+                "settlement_asset": "USDC",
+                "instrument_type": "perpetual_rwa_future",
+                "kind": asset.asset_class,
+            }
+
+        return {
+            "underlying": symbol,
+            "funding_interval_s": 3600,
+            "settlement_asset": "USDC",
+            "instrument_type": "perpetual_future",
+        }
+
     async def get_symbols(self) -> list[str]:
-        # Returns available perpetual future underlyings sorted by some exchange-defined order.
-        # Endpoint verified against https://omni.variational.io/api/instruments
-        res = await self._call("GET", "/instruments")
-        items = [x for x in res if x.get("instrument_type") == "perpetual_future"]
-        return [x["underlying"] for x in items]
+        assets = await self.supported_assets()
+        return [asset.asset for asset in assets.values() if asset.has_perp]
 
     async def is_symbol_tradeable(self, symbol: str, at: datetime, reduce_only=False) -> bool:
-        return True
+        assets = await self.supported_assets()
+        asset = assets.get(symbol)
+        if asset is None or not asset.has_perp:
+            return False
+        return reduce_only or not asset.is_close_only_mode
 
     async def _quote(self, asset: str, qty: Decimal | int | float) -> IndicativeQuote:
         pld = {
-            "instrument": {
-                "underlying": asset,
-                "funding_interval_s": 3600,
-                "settlement_asset": "USDC",
-                "instrument_type": "perpetual_future",
-            },
+            "instrument": await self._instrument(asset),
             "qty": str(qty),
         }
         res = await self._call("POST", "/quotes/indicative", json=pld)
@@ -288,12 +321,7 @@ class OmniClient:
             "order_type": "limit",
             "limit_price": str(price),
             "side": "buy" if side == "bid" else "sell",
-            "instrument": {
-                "underlying": symbol,
-                "instrument_type": "perpetual_future",
-                "settlement_asset": "USDC",
-                "funding_interval_s": 3600,
-            },
+            "instrument": await self._instrument(symbol),
             "qty": str(qty),
             "is_auto_resize": False,
             "use_mark_price": False,
