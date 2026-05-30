@@ -8,7 +8,7 @@ from decimal import Decimal
 
 from lib.errors import AppError
 from lib.logger import logger
-from lib.utils import round_to_tick_size
+from lib.utils import format_duration, round_to_tick_size
 
 from .models import (
     Order,
@@ -114,6 +114,50 @@ async def wait_for_entry_quality(
 _LIMIT_PRICE_DRIFT_PCT = Decimal("0.0025")  # 0.25% BBO drift → give up waiting, go to fallback
 
 
+@dataclass
+class LimitOrderWaitState:
+    order_started_at: float
+    wait_window_started_at: float
+    last_log_at: float
+    bbo_stable_extensions: int = 0
+    last_stable_drift: Decimal | None = None
+
+    @classmethod
+    def start(cls) -> "LimitOrderWaitState":
+        now = time.time()
+        return cls(order_started_at=now, wait_window_started_at=now, last_log_at=now)
+
+    def timeout_started_at(self, filled_since: float | None) -> float:
+        return filled_since or self.wait_window_started_at
+
+    def mark_bbo_stable(self, drift: Decimal) -> None:
+        self.bbo_stable_extensions += 1
+        self.last_stable_drift = drift
+        self.wait_window_started_at = time.time()
+
+    def elapsed(self) -> float:
+        return time.time() - self.order_started_at
+
+    def waiting_log(
+        self, order: Order, side: Side, qty: Decimal, symbol: str, *, force: bool = False
+    ) -> str | None:
+        now = time.time()
+        if not force and now - self.last_log_at < 30:
+            return None
+
+        fill_pct = f" ({order.filled / order.size:.0%})" if order.filled > 0 else ""
+        extra = ""
+        if self.bbo_stable_extensions and self.last_stable_drift is not None:
+            extra = (
+                f" (BBO stable drift={self.last_stable_drift:.3%}, "
+                f"extended {self.bbo_stable_extensions}x)"
+            )
+
+        self.last_log_at = now
+        elapsed = format_duration(now - self.order_started_at)
+        return f"Limit {side} {qty} {symbol}: waiting{fill_pct} elapsed={elapsed}{extra}"
+
+
 async def _fetch_limit_price(
     client: TradingClient, symbol: str, side: Side, tick_size: Decimal
 ) -> Decimal:
@@ -142,10 +186,9 @@ async def fill_limit_order(
         return order  # already filled (e.g. exchange falls back to market internally)
 
     order_id = order.id
-    started_at, filled_since = time.time(), None
+    wait = LimitOrderWaitState.start()
+    filled_since = None
     poll_delay = 0.25  # starts at 250ms, grows to ~3s
-    last_log_at = started_at
-    bbo_stable_warned = False
 
     while True:
         await asyncio.sleep(poll_delay)
@@ -153,22 +196,16 @@ async def fill_limit_order(
 
         order = await client.get_order(order_id)
         if order is None:
-            if (time.time() - started_at) > timeout:
+            if wait.elapsed() > timeout:
                 raise AppError(f"Limit order {order_id} never appeared — unknown state, aborting")
             continue  # archive lag — keep polling
 
-        elapsed = time.time() - started_at
-        if time.time() - last_log_at >= 30:
-            fill_pct = f" ({order.filled / order.size:.0%})" if order.filled > 0 else ""
-            log.debug(f"Limit {side} {qty} {symbol}: waiting{fill_pct} elapsed={elapsed:.0f}s")
-            last_log_at = time.time()
-
         if order.status == OrderStatus.FILLED:
-            log.debug(f"Limit {side} {qty} {symbol} filled in {time.time() - started_at:.1f}s")
+            log.debug(f"Limit {side} {qty} {symbol} filled in {format_duration(wait.elapsed())}")
             return order
 
         if order.status == OrderStatus.CANCELED:
-            elapsed = time.time() - started_at
+            elapsed = wait.elapsed()
             raise RuntimeError(
                 f"Limit {symbol} canceled by exchange after {elapsed:.0f}s"
                 f" (filled {order.filled}/{order.size})"
@@ -177,18 +214,17 @@ async def fill_limit_order(
         if order.filled > 0 and filled_since is None:
             filled_since = time.time()
 
-        check_time = filled_since or started_at
+        check_time = wait.timeout_started_at(filled_since)
         if (time.time() - check_time) > timeout:
             current_price = await _fetch_limit_price(client, symbol, side, tick_size)
             drift = abs(current_price - price) / price
             if drift <= _LIMIT_PRICE_DRIFT_PCT:
-                if not bbo_stable_warned:
-                    log.debug(f"Limit timeout but BBO stable (drift={drift:.3%}), continuing wait")
-                    bbo_stable_warned = True
-                started_at, filled_since = time.time(), None
+                wait.mark_bbo_stable(drift)
+                if msg := wait.waiting_log(order, side, qty, symbol, force=True):
+                    log.debug(msg)
+                filled_since = None
                 continue
 
-            bbo_stable_warned = False
             log.debug(f"Limit order timeout after {timeout}s (BBO drift {drift:.3%})")
             await client.cancel_order(order)
             remaining = order.size - order.filled
@@ -196,6 +232,9 @@ async def fill_limit_order(
                 log.debug(f"Limit timeout → market fallback {side} {remaining} {symbol}")
                 return await client.market_order(symbol, side, remaining, reduce_only)
             raise RuntimeError(f"Limit {symbol} timed out after {timeout}s, no fallback")
+
+        if msg := wait.waiting_log(order, side, qty, symbol):
+            log.debug(msg)
 
 
 # MARK: Execution primitives

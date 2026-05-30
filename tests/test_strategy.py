@@ -8,6 +8,7 @@ from typing import cast
 
 import pytest
 
+from lib.logger import logger
 from strategy.cycle import DeltaStrategy
 from strategy.execution import (
     _simulate_book_fill,
@@ -29,6 +30,17 @@ from strategy.trade import DeltaLeg, DeltaTrade, DeltaTradeSummary
 
 async def _instant_sleep(_):
     """Replace asyncio.sleep with a no-op for fast tests."""
+
+
+class FakeClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def time(self) -> float:
+        return self.now
+
+    async def sleep(self, delay: float) -> None:
+        self.now += delay
 
 
 def make_order(id: str, symbol: str, side: Side, qty: Decimal) -> Order:
@@ -1272,6 +1284,59 @@ async def test_limit_stable_bbo_resets_timer(monkeypatch):
     assert result.status == OrderStatus.FILLED
     assert "cancel_order" not in a.calls
     assert "market_order" not in a.calls
+
+
+async def test_limit_stable_bbo_wait_logs_use_total_elapsed(monkeypatch):
+    a = MockClient("a")
+    clock = FakeClock()
+    monkeypatch.setattr("strategy.execution.time.time", clock.time)
+    monkeypatch.setattr("strategy.execution.asyncio.sleep", clock.sleep)
+    qty = Decimal("0.002")
+    get_order_calls = 0
+    logs: list[str] = []
+    sink_id = logger.add(lambda msg: logs.append(str(msg)), format="{message}", level="DEBUG")
+
+    async def open_limit(s, side, q, price, reduce_only=False):
+        return Order(
+            id="ord-l",
+            symbol=s,
+            side=side,
+            size=q,
+            filled=Decimal(0),
+            price=price,
+            status=OrderStatus.OPEN,
+        )
+
+    async def fills_after_stable_extension(oid):
+        nonlocal get_order_calls
+        get_order_calls += 1
+        if get_order_calls < 4:
+            return Order(
+                id=oid,
+                symbol="BTC",
+                side="bid",
+                size=qty,
+                filled=Decimal(0),
+                price=Decimal("49999"),
+                status=OrderStatus.OPEN,
+            )
+        return make_order(oid, "BTC", "bid", qty)
+
+    a.limit_order = open_limit  # type: ignore[method-assign]
+    a.get_order = fills_after_stable_extension  # type: ignore[method-assign]
+
+    try:
+        result = await fill_limit_order(a, "BTC", "bid", qty, timeout=1, use_market_fallback=True)
+    finally:
+        logger.remove(sink_id)
+
+    assert result is not None
+    assert result.status == OrderStatus.FILLED
+    assert any(
+        "Limit bid 0.002 BTC: waiting elapsed=2s (BBO stable drift=0.000%, extended 1x)" in message
+        for message in logs
+    )
+    assert any("Limit bid 0.002 BTC filled in 5s" in message for message in logs)
 
 
 def test_simulate_book_fill_single_level():
