@@ -165,7 +165,7 @@ class DeltaTrade:
             else:
                 last_leg.qty -= abs(delta)
                 if usd_imbalance > QTY_IMBALANCE_WARN_USD:
-                    logger.warning(f"qty imbalance adjusted: {delta} qty = {usd_imbalance:.2f} USD")
+                    logger.debug(f"qty imbalance adjusted: {delta} qty = {usd_imbalance:.2f} USD")
 
     async def log_plan(self) -> None:
         total_usd = sum(leg.size_usd for leg in self.legs)

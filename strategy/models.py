@@ -169,6 +169,24 @@ def opposite_side(side: Side) -> Side:
     return "ask" if side == "bid" else "bid"
 
 
+def trading_client_trace(exc: BaseException) -> str | None:
+    path: list[str] = []
+    tb = exc.__traceback__
+
+    while tb:
+        frame = tb.tb_frame
+        obj = frame.f_locals.get("self")
+        if isinstance(obj, TradingClient):
+            attr = frame.f_locals.get("__attr")  # decorators keep the original method here
+            fn = getattr(attr, "__name__", frame.f_code.co_name)
+            label = f"{type(obj).__name__}.{fn}({obj.name})"
+            if not path or path[-1] != label:
+                path.append(label)
+        tb = tb.tb_next
+
+    return " → ".join(path) if path else None
+
+
 # MARK: Strategy config
 
 

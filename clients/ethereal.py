@@ -235,8 +235,7 @@ class EtherealClient:
     async def get_order_book(self, symbol: str) -> OrderBook:
         sym = await self.symbol_info(symbol=symbol)
         res = await self._call("GET", "/product/market-liquidity", params={"productId": sym.id})
-        data = res["data"]
-        return OrderBook.build(bids=data["bids"][:5], asks=data["asks"][:5])
+        return OrderBook.build(bids=res["bids"][:5], asks=res["asks"][:5])
 
     async def get_price(self, symbol: str) -> Decimal:
         bid, ask = await self.get_bbo(symbol)

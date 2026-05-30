@@ -15,12 +15,18 @@ from lib.logger import logger
 from lib.utils import round_to_tick_size
 
 from .execution import close_all
-from .models import StrategyConfig, TradingClient
+from .models import StrategyConfig, TradingClient, trading_client_trace
 from .symbols import filter_exchange_symbols
 from .trade import DeltaTrade, DeltaTradeSummary, plan_delta_trades
 
 USD_TICK = Decimal("0.01")
 SAFE_PCT = Decimal("0.96")  # leave 4% margin to avoid liquidation on leverage rounding
+
+
+def _format_error(exc: BaseException) -> str:
+    msg = f"{type(exc).__name__}: {exc}"
+    client_path = trading_client_trace(exc)
+    return f"{msg} @ {client_path}" if client_path else msg
 
 
 def calc_total_from_pct(balances: list[tuple[str, float]], leverage: int, pct: float) -> Decimal:
@@ -80,7 +86,7 @@ class RepeatErrorGuard:
             self.last_error_key = None
             self.last_error_count = 0
         except Exception as e:
-            error_key = f"{type(e).__name__}: {e}"
+            error_key = _format_error(e)
             if error_key == self.last_error_key:
                 self.last_error_count += 1
             else:
@@ -88,7 +94,7 @@ class RepeatErrorGuard:
                 self.last_error_count = 1
 
             if self.last_error_count == 2:
-                logger.warning(f"{self.prefix} {type(e)}: {str(e)[:200]}, continuing wait...")
+                logger.warning(f"{self.prefix} {error_key[:200]}, continuing wait...")
 
 
 class DeltaStrategy:
@@ -135,7 +141,7 @@ class DeltaStrategy:
                 failures += 1
                 if self.cfg.max_failures > 0 and failures >= self.cfg.max_failures:
                     logger.opt(exception=True).error("Too many consecutive failures, stopping")
-                    await tg.on_crash(f"{type(e).__name__}: {e}")
+                    await tg.on_crash(_format_error(e))
                     # TODO: return exits only this group (others keep running); raise propagates to
                     # CLI and prints ugly traceback; SystemExit(1) kills the whole process cleanly.
                     # Decide which behaviour is correct for multi-group mode.
@@ -143,9 +149,10 @@ class DeltaStrategy:
 
                 wait_sec = min(3 * (2 ** (failures - 1)), 60) * 60  # 3m→6m→12m→24m→48m→60m
                 wait_str = utils.format_duration(wait_sec)
-                msg = f"Cycle failed ({failures}) {type(e).__name__}: {e}, retrying in {wait_str}"
+                error = _format_error(e)
+                msg = f"Cycle failed ({failures}) {error}, retrying in {wait_str}"
                 logger.warning(msg)
-                await tg.on_error(f"{type(e).__name__}: {e}", failures, wait_sec)
+                await tg.on_error(error, failures, wait_sec)
                 await self._wait(wait_sec)
 
     async def trade_cycle(self):
