@@ -21,6 +21,7 @@ from .logger import logger
 from .models import AccountConfig
 from .proxy import print_proxies
 from .telegram import TgConfig
+from .update import latest_release_notice
 
 
 def eprint(*args, **kwargs):
@@ -179,6 +180,8 @@ async def create_cli(name: str, config_path: str, sec_fields: list[str]) -> argp
 
     if not args.no_banner:
         eprint(f":: delta-farmer {VERSION}| https://x.com/uid127 | https://t.me/eazyrekt")
+        if notice := await latest_release_notice(VERSION):
+            eprint(notice)
 
     telemetry.init(exchange=name, command=args.command or "", version=VERSION, release=IS_RELEASE)
     telemetry.track("$pageview", {"$current_url": f"cli://delta-farmer/{name}/{args.command}"})
