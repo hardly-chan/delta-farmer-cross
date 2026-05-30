@@ -2,7 +2,7 @@
 # Copyright (c) vladkens | MIT License | Powered by caffeine and stackoverflow
 import asyncio
 from collections import defaultdict
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
 from typing import TypeVar
 
@@ -10,16 +10,12 @@ from clients.pacifica import PacificaClient, PacificaPoint, PacificaTrade
 from lib.cli import create_cli, run_app
 from lib.store import DataStore
 from lib.table import AutoTable, Column, PeriodRow, render_stats
-from lib.utils import gather_accs, parse_filter, short_addr, to_period_day, to_period_week
+from lib.utils import gather_accs, parse_filter, short_addr, to_period_day
 from strategy import StrategyConfig
 from strategy.runner import close_all, print_positions, run_groups
 
-# https://docs.pacifica.fi/points-program
-GENESIS = datetime(2025, 9, 4, tzinfo=UTC)
-
 T = TypeVar("T")
 DD = defaultdict[str, defaultdict[str, T]]
-
 
 # MARK: Storages
 
@@ -73,7 +69,7 @@ async def print_stats(accs: list[PacificaClient], period="week", filter_period="
     ttl = 0 if force else 3600
 
     def period_fn(dt: datetime) -> str:
-        return to_period_day(dt) if period == "day" else to_period_week(dt, genesis=GENESIS)
+        return to_period_day(dt) if period == "day" else PacificaClient.to_week_label(dt)
 
     all_trades, all_points = await asyncio.gather(
         gather_accs(accs, lambda acc: sync_trades(acc, ttl)),

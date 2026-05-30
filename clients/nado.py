@@ -3,7 +3,7 @@
 import asyncio
 import random
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Self
 
@@ -18,6 +18,11 @@ from strategy import Order, OrderBook, OrderStatus, Position, ProfileInfo, Side,
 
 APP_URL = "https://app.nado.xyz"
 _ISOLATED_MARGIN_BUFFER = Decimal("1.02")
+_NAMED_EPOCHS: list[tuple[str, datetime]] = [
+    ("ALP", datetime(2025, 11, 20, tzinfo=UTC)),
+    ("OFF", datetime(2026, 1, 16, tzinfo=UTC)),
+]
+_POINTS_GENESIS = datetime(2026, 1, 30, tzinfo=UTC)
 
 USDT_PID = 0  # Nado uses product_id=0 for USDT spot balance and fees
 USDC_PID = 5  # USDC spot balance (if any) and fee rebates for isolated margin
@@ -144,6 +149,21 @@ class NadoClient:
     @classmethod
     def __type_check(cls) -> type[TradingClient]:
         return NadoClient
+
+    @classmethod
+    def to_week_label(cls, dt: datetime) -> str:
+        for i, (prefix, since) in enumerate(_NAMED_EPOCHS):
+            until = _NAMED_EPOCHS[i + 1][1] if i + 1 < len(_NAMED_EPOCHS) else _POINTS_GENESIS
+            if since <= dt < until:
+                s, e = since.strftime("%b%d"), (until - timedelta(seconds=1)).strftime("%b%d")
+                return f"{prefix} {s}-{e}"
+        if dt >= _POINTS_GENESIS:
+            n = (dt - _POINTS_GENESIS).days // 7 + 1
+            since = _POINTS_GENESIS + timedelta(weeks=n - 1)
+            until = since + timedelta(weeks=1)
+            s, e = since.strftime("%b%d"), (until - timedelta(seconds=1)).strftime("%b%d")
+            return f"W{n:02d} {s}-{e}"
+        return dt.strftime("%Y-%m-%d")
 
     @classmethod
     def from_config(cls, cfg: AccountConfig) -> Self:

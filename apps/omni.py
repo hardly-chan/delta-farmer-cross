@@ -2,24 +2,16 @@
 # Copyright (c) vladkens | MIT License | No AI was harmed making this
 import asyncio
 from collections import defaultdict
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
-from functools import partial
 
 from clients.omni import OmniClient, OmniPoint
 from lib.cli import create_cli, run_app
 from lib.store import DataStore
 from lib.table import AutoTable, Column, PeriodRow, render_stats
-from lib.utils import gather_accs, parse_filter, short_addr, to_period_day, to_period_week
+from lib.utils import gather_accs, parse_filter, short_addr, to_period_day
 from strategy import StrategyConfig
 from strategy.runner import close_all, print_positions, run_groups
-
-# https://docs.variational.io/omni/rewards/points
-# https://omni.variational.io/points (UI counts from -1 week)
-GENESIS = datetime(2025, 12, 17 - 6, tzinfo=UTC)
-
-to_week_name = partial(to_period_week, genesis=GENESIS)
-
 
 # MARK: Storages
 
@@ -76,7 +68,7 @@ async def print_stats(accs: list[OmniClient], period="week", filter_period="all"
     gvol = defaultdict(lambda: defaultdict(Decimal))
     gpts = defaultdict(lambda: defaultdict(Decimal))
 
-    period_fn = to_period_day if period == "day" else to_week_name
+    period_fn = to_period_day if period == "day" else OmniClient.to_week_label
     ttl = 0 if force else 3600
 
     all_transfers, all_trades, all_points = await asyncio.gather(

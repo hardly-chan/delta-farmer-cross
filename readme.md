@@ -170,6 +170,24 @@ uv run apps/<app>.py config decrypt        # Decrypt to view raw keys
 uv run apps/<app>.py --help
 ```
 
+### Weekly summary
+
+`scripts/weekly.py` reads cached stats from `.cache`. Refresh exchange data first with
+`uv run apps/<app>.py stats --force` when you need fresh numbers.
+
+```bash
+uv run scripts/weekly.py                    # All-time summary by exchange
+uv run scripts/weekly.py 0                  # Latest cached ISO week
+uv run scripts/weekly.py -1                 # Previous ISO week
+uv run scripts/weekly.py W14                # Specific week in the current year
+uv run scripts/weekly.py 2026-W14           # Specific ISO week with year
+uv run scripts/weekly.py --from W14 --to W22 # Summary for a week range
+uv run scripts/weekly.py -P --from W14 --to W22 # Weekly detail inside the range
+uv run scripts/weekly.py -e Hyena           # One exchange, all available periods
+uv run scripts/weekly.py --burn             # Burn pivot by ISO week and exchange
+uv run scripts/weekly.py --help             # Full weekly report help
+```
+
 ---
 
 ## Configuration Reference
@@ -182,7 +200,7 @@ All settings live in your `configs/<app>.toml` file. Here is every available par
 | ------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `leverage`          | `10`     | Leverage multiplier (1–49). Set it to the **lowest** max leverage across all your chosen symbols.                                                        |
 | `symbols`           | required | Candidate trading pairs, e.g. `["BTC"]` or `["BTC", "ETH"]`. Check the exchange UI for available symbols.                                                |
-| `symbols_per_trade` | `1`      | How many currently tradeable symbols to sample per cycle. `1` = classic mode; `2`–`4` = basket mode. Must be no larger than `symbols`.                    |
+| `symbols_per_trade` | `1`      | How many currently tradeable symbols to sample per cycle. `1` = classic mode; `2`–`4` = basket mode. Must be no larger than `symbols`.                   |
 | `use_limit`         | `false`  | If `true`, the prime account opens with a limit order instead of a market order — reduces fees.                                                          |
 | `first_as_prime`    | `false`  | If `true`, the first account in the list is always the prime (limit-side). If `false`, it rotates randomly each cycle. Ignored when `group_size` is set. |
 

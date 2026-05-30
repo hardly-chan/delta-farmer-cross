@@ -1,7 +1,7 @@
 # delta-farmer | https://github.com/vladkens/delta-farmer
 # Copyright (c) vladkens | MIT License | Built by humans, blamed on AI
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from eth_account.messages import encode_defunct
@@ -15,6 +15,7 @@ from strategy import Position, ProfileInfo, TradingClient
 from .hyperliquid import HyperLiquidClient
 
 HYENA_API = "https://app.hyena.trade"
+_POINTS_GENESIS = datetime(2025, 12, 4, tzinfo=UTC)
 
 
 # MARK: Models
@@ -34,6 +35,11 @@ class HyenaRank(BaseModel):
 class HyenaHistoryItem(BaseModel):
     id: str  # "reward-week-6" etc.
     enaxPoints: Decimal
+
+    @property
+    def start_window(self) -> datetime:
+        n = int(self.id.removeprefix("reward-week-"))
+        return _POINTS_GENESIS + timedelta(weeks=n - 1)
 
 
 class HyenaFill(BaseModel):
@@ -66,6 +72,10 @@ class HyenaClient(HyperLiquidClient):
     @classmethod
     def __type_check(cls) -> type[TradingClient]:
         return HyenaClient
+
+    @classmethod
+    def to_week_label(cls, dt: datetime) -> str:
+        return utils.to_period_week(dt, genesis=_POINTS_GENESIS)
 
     def __init__(self, name: str, privkey: str, proxy: str | None = None):
         super().__init__(name, privkey, proxy)

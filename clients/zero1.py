@@ -45,7 +45,7 @@ TURNKEY_ORG_ID = "497f60f3-57cd-4aec-af39-7415c2fafaab"
 ZERO1_JANUS_LOGIN_PATH = "/api/janus/v1/auth/wallet/login"
 
 ZERO1_APP = "https://01.xyz"
-ZERO1_GENESIS = datetime(2026, 2, 3, tzinfo=UTC)  # week 1 start (Tuesday)
+_POINTS_GENESIS = datetime(2026, 2, 3, tzinfo=UTC)  # week 1 start (Tuesday)
 
 # last know values. can be changed on next deployment, but code have auto-discovery fallback
 AUTH_ACT = "404455b12249fd9ec1aea6c44bf40eb0338e7cd9a2"
@@ -351,6 +351,10 @@ class ZeroOneClient:
     @classmethod
     def __type_check(cls) -> type[TradingClient]:
         return ZeroOneClient
+
+    @classmethod
+    def to_week_label(cls, dt: datetime) -> str:
+        return utils.to_period_week(dt, genesis=_POINTS_GENESIS)
 
     @classmethod
     def from_config(cls, cfg: AccountConfig) -> Self:
@@ -815,7 +819,13 @@ class ZeroOneClient:
     async def _points(self, solana_addr: str, acc_id: int) -> tuple[Decimal, int | None]:
         data = await self._fetch_points(solana_addr, acc_id)
         lb = data.get("leaderboardData", {}) or {}
-        return Decimal(str(lb.get("points", 0))), lb.get("rank")
+        points = Decimal(str(lb.get("points", 0)))
+        if not points:
+            points = sum(
+                (Decimal(str(d.get("points", 0))) for d in data.get("data", [])),
+                Decimal(0),
+            )
+        return points, lb.get("rank")
 
     async def points_history(self) -> list[ZeroOnePoint]:
         _, acc_id = await self._ensure_session()
@@ -823,8 +833,9 @@ class ZeroOneClient:
         data = await self._fetch_points(solana_addr, acc_id)
         result = []
         for d in data.get("data", []):
-            n = int(d["stage"].split("_")[1])
-            start = ZERO1_GENESIS + timedelta(weeks=n - 1)
+            stage = d["stage"]
+            n = 0 if stage == "referral_rewards" else int(stage.split("_")[1])
+            start = _POINTS_GENESIS + timedelta(weeks=n - 1)
             result.append(ZeroOnePoint(start_window=start, points=Decimal(str(d["points"]))))
         return result
 

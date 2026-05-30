@@ -2,7 +2,7 @@
 # Copyright (c) vladkens | MIT License | Built by humans, blamed on AI
 import asyncio
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, Literal, Self
 
@@ -19,7 +19,7 @@ from strategy import Order, OrderBook, OrderStatus, Position, ProfileInfo, Side,
 API_URL = "https://api.ethereal.trade/v1"
 APP_URL = "https://app.ethereal.trade"
 ARCHIVE_URL = "https://archive.ethereal.trade/v1"
-GENESIS_MS = int(datetime(2025, 12, 18).timestamp() * 1000)
+_POINTS_GENESIS = datetime(2025, 12, 18, tzinfo=UTC)
 
 NativeSide = Literal["buy", "sell"]
 
@@ -104,6 +104,10 @@ class EtherealClient:
     @classmethod
     def __type_check(cls) -> type[TradingClient]:
         return EtherealClient
+
+    @classmethod
+    def to_week_label(cls, dt: datetime) -> str:
+        return utils.to_period_week(dt, genesis=_POINTS_GENESIS)
 
     @classmethod
     def from_config(cls, cfg: AccountConfig) -> Self:
@@ -431,8 +435,9 @@ class EtherealClient:
         return Decimal(res.get("volumeUsd", 0))
 
     async def _account_snapshot(self) -> dict:
+        gms = int(_POINTS_GENESIS.timestamp() * 1000)  # genesis in ms
         sub = await self.subaccount()
-        pld = {"resolution": "week1", "startTime": GENESIS_MS, "orderBy": "time", "order": "asc"}
+        pld = {"resolution": "week1", "startTime": gms, "orderBy": "time", "order": "asc"}
         pld = {"subaccountId": sub.id, **pld}
         res = await self._call("GET", f"{ARCHIVE_URL}/subaccount/balance", params=pld)
         data = res.get("data", [])

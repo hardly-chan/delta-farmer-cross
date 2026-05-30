@@ -17,6 +17,8 @@ from strategy import Order, OrderBook, OrderStatus, Position, ProfileInfo, Side,
 
 API_URL = "https://omni.variational.io/api"
 APP_URL = "https://omni.variational.io"
+# Season was announced on Dec 17, but Omni UI labels week 1 as starting 6 days earlier.
+_POINTS_GENESIS = datetime(2025, 12, 17 - 6, tzinfo=UTC)
 
 
 class IndicativeQuote(BaseModel):
@@ -74,6 +76,10 @@ class OmniClient:
     @classmethod
     def __type_check(cls) -> type[TradingClient]:
         return OmniClient
+
+    @classmethod
+    def to_week_label(cls, dt: datetime) -> str:
+        return utils.to_period_week(dt, genesis=_POINTS_GENESIS)
 
     @classmethod
     def from_config(cls, cfg: AccountConfig) -> Self:

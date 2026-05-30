@@ -2,7 +2,7 @@
 # Copyright (c) vladkens | MIT License | Refactoring is just future procrastination
 import asyncio
 from collections import defaultdict
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from decimal import Decimal
 from typing import TypeVar
 
@@ -16,29 +16,6 @@ from strategy.runner import close_all, print_positions, run_groups
 
 T = TypeVar("T")
 DD = defaultdict[str, defaultdict[str, T]]
-
-# Named epochs before weekly cadence kicked in (end = next entry's start or _W1_START)
-_NAMED_EPOCHS: list[tuple[str, datetime]] = [
-    ("ALP", datetime(2025, 11, 20, tzinfo=UTC)),
-    ("OFF", datetime(2026, 1, 16, tzinfo=UTC)),
-]
-_W1_START = datetime(2026, 1, 30, tzinfo=UTC)
-
-
-def _period_label(dt: datetime) -> str:
-    for i, (prefix, since) in enumerate(_NAMED_EPOCHS):
-        until = _NAMED_EPOCHS[i + 1][1] if i + 1 < len(_NAMED_EPOCHS) else _W1_START
-        if since <= dt < until:
-            s, e = since.strftime("%b%d"), (until - timedelta(seconds=1)).strftime("%b%d")
-            return f"{prefix} {s}-{e}"
-    if dt >= _W1_START:
-        n = (dt - _W1_START).days // 7 + 1
-        since = _W1_START + timedelta(weeks=n - 1)
-        until = since + timedelta(weeks=1)
-        s, e = since.strftime("%b%d"), (until - timedelta(seconds=1)).strftime("%b%d")
-        return f"W{n:02d} {s}-{e}"
-    return dt.strftime("%Y-%m-%d")
-
 
 # MARK: Storages
 
@@ -97,7 +74,7 @@ async def print_stats(accs: list[NadoClient], period="week", filter_period="all"
     )
 
     def period_fn(dt: datetime) -> str:
-        return dt.strftime("%Y-%m-%d") if period == "day" else _period_label(dt)
+        return dt.strftime("%Y-%m-%d") if period == "day" else NadoClient.to_week_label(dt)
 
     for acc, trades in zip(accs, all_trades):
         for t in trades:

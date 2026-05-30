@@ -2,20 +2,15 @@
 # Copyright (c) vladkens | MIT License | Crafted with love and ctrl+c
 import asyncio
 from collections import defaultdict
-from datetime import UTC, datetime
 from decimal import Decimal
-from functools import partial
 
 from clients.ethereal import EtherealClient, EtherealPoint, EtherealPosition
 from lib.cli import create_cli, run_app
 from lib.store import DataStore
 from lib.table import AutoTable, Column, PeriodRow, render_stats
-from lib.utils import gather_accs, parse_filter, short_addr, to_period_day, to_period_week
+from lib.utils import gather_accs, parse_filter, short_addr, to_period_day
 from strategy import StrategyConfig
 from strategy.runner import close_all, print_positions, run_groups
-
-GENESIS = datetime(2025, 12, 18, tzinfo=UTC)
-
 
 # MARK: Storages
 
@@ -68,7 +63,7 @@ async def print_stats(accs: list[EtherealClient], period="week", filter_period="
     gpts: dict[str, dict[str, Decimal]] = defaultdict(lambda: defaultdict(Decimal))
     ttl = 0 if force else 3600
 
-    period_fn = to_period_day if period == "day" else partial(to_period_week, genesis=GENESIS)
+    period_fn = to_period_day if period == "day" else EtherealClient.to_week_label
 
     all_trades, all_points = await asyncio.gather(
         gather_accs(accs, lambda acc: sync_trades(acc, ttl)),

@@ -6,11 +6,11 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TypeVar
 
-from clients.zero1 import ZERO1_GENESIS, ZeroOneClient, ZeroOnePoint
+from clients.zero1 import ZeroOneClient, ZeroOnePoint
 from lib.cli import create_cli, run_app
 from lib.store import DataStore
 from lib.table import AutoTable, Column, PeriodRow, render_stats
-from lib.utils import gather_accs, parse_filter, short_addr, to_period_day, to_period_week
+from lib.utils import gather_accs, parse_filter, short_addr, to_period_day
 from strategy import StrategyConfig
 from strategy.runner import close_all, print_positions, run_groups
 
@@ -68,7 +68,6 @@ async def print_info(accs: list[ZeroOneClient]):
         Column("Points", "{:,.2f}", total=sum),
         Column("P/Price", "{:,.3f}", compute=lambda r: r["Burn"] / r["Points"]),
         Column("Balance", "{:,.2f}", total=sum),
-        Column("Rank", "{:,}", justify="right"),
     )
 
     async def row(acc: ZeroOneClient):
@@ -76,8 +75,8 @@ async def print_info(accs: list[ZeroOneClient]):
         p = await acc.profile() if await acc.registered() else None
         a = short_addr(acc.address)
         if not p:
-            return ("✗", acc.name, a, None, None, None, None, None)
-        return ("✓", acc.name, a, p.volume, -p.pnl, p.points, p.balance, p.rank)
+            return ("✗", acc.name, a, None, None, None, None)
+        return ("✓", acc.name, a, p.volume, -p.pnl, p.points, p.balance)
 
     for r in await gather_accs(accs, row):
         tbl.add_row(*r)
@@ -89,7 +88,7 @@ async def print_stats(accs: list[ZeroOneClient], period="week", filter_period="a
     ttl = 0 if force else 3600
 
     def period_fn(dt: datetime) -> str:
-        return to_period_day(dt) if period == "day" else to_period_week(dt, genesis=ZERO1_GENESIS)
+        return to_period_day(dt) if period == "day" else ZeroOneClient.to_week_label(dt)
 
     stats_list = await gather_accs(accs, lambda acc: _fetch_stats(acc, ttl))
     all_points = await gather_accs(accs, lambda acc: sync_points(acc, ttl))
@@ -120,7 +119,7 @@ async def print_stats(accs: list[ZeroOneClient], period="week", filter_period="a
         for p in pts:
             gpts[period_fn(p.start_window)][acc.name] = p.points
 
-    all_periods = sorted(gpnl.keys() | gfee.keys() | gfnd.keys())
+    all_periods = sorted(gpnl.keys() | gfee.keys() | gfnd.keys() | gpts.keys())
     periods_to_show = parse_filter(filter_period, all_periods)
     all_names = [acc.name for acc in accs]
 

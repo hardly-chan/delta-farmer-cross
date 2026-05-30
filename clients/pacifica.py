@@ -3,7 +3,7 @@
 import asyncio
 import json
 import time
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Literal, Self, cast
 
@@ -18,6 +18,7 @@ from strategy import Order, OrderBook, OrderStatus, Position, ProfileInfo, Side,
 
 API_URL = "https://api.pacifica.fi/api/v1"
 APP_URL = "https://app.pacifica.fi"
+_POINTS_GENESIS = datetime(2025, 9, 4, tzinfo=UTC)
 
 DEFAULT_SLIPPAGE = Decimal("0.5")
 
@@ -112,6 +113,10 @@ class PacificaClient:
     @classmethod
     def __type_check(cls) -> type[TradingClient]:
         return PacificaClient
+
+    @classmethod
+    def to_week_label(cls, dt: datetime) -> str:
+        return utils.to_period_week(dt, genesis=_POINTS_GENESIS)
 
     @classmethod
     def from_config(cls, cfg: AccountConfig) -> Self:

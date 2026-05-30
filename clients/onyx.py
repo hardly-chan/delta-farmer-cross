@@ -5,7 +5,7 @@ import csv
 import io
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from typing import ClassVar
+from typing import ClassVar, Self
 
 import lz4.frame
 from eth_account.messages import encode_defunct
@@ -23,6 +23,7 @@ PRIVY_API = "https://auth.privy.io"
 ARJUNA_API = "https://arjuna-production.up.railway.app"
 ONYX_APP = "https://app.onyx.live"
 PRIVY_APP_ID = "cmcmc1m1t012bl80npg0gl99u"
+_POINTS_GENESIS = datetime(2026, 3, 1, tzinfo=UTC)
 
 _PRIVY_HEADERS = {
     "privy-app-id": PRIVY_APP_ID,
@@ -142,6 +143,44 @@ class OnyxUserInfo(BaseModel):
     accountSummary: OnyxAccountSummary = OnyxAccountSummary()
 
 
+class OnyxPoint(BaseModel):
+    start_window: datetime
+    points: Decimal
+
+    @classmethod
+    def day0(cls, points: Decimal) -> Self:
+        return cls(start_window=_POINTS_GENESIS - timedelta(weeks=1), points=points)
+
+    @classmethod
+    def from_period(cls, data: dict) -> Self | None:
+        points = Decimal(str(data.get("pointsEarned", data.get("points", 0))))
+        if not points:
+            return None
+        return cls(
+            start_window=datetime.fromisoformat(data["epochStart"].replace("Z", "+00:00")),
+            points=points,
+        )
+
+    @classmethod
+    def from_overview(cls, data: dict) -> list[Self]:
+        result: list[Self] = []
+
+        day0 = data.get("day0Points") or {}
+        day0_points = Decimal(str(day0.get("total", 0)))
+        if day0_points:
+            result.append(cls.day0(day0_points))
+
+        current = data.get("currentPeriod") or {}
+        if current_point := cls.from_period(current):
+            result.append(current_point)
+
+        for item in data.get("periodBreakdown") or []:
+            if point := cls.from_period(item):
+                result.append(point)
+
+        return result
+
+
 # MARK: Client
 
 
@@ -168,6 +207,14 @@ class OnyxClient(HyperLiquidClient):
     @classmethod
     def __type_check(cls) -> type[TradingClient]:
         return OnyxClient
+
+    @classmethod
+    def to_week_label(cls, dt: datetime) -> str:
+        if _POINTS_GENESIS - timedelta(weeks=1) <= dt < _POINTS_GENESIS:
+            since = _POINTS_GENESIS - timedelta(weeks=1)
+            until = _POINTS_GENESIS - timedelta(days=1)
+            return f"OFF {since.strftime('%b%d')}-{until.strftime('%b%d')}"
+        return utils.to_period_week(dt, genesis=_POINTS_GENESIS)
 
     def __init__(self, name: str, privkey: str, proxy: str | None = None):
         super().__init__(name, privkey, proxy)
@@ -251,8 +298,14 @@ class OnyxClient(HyperLiquidClient):
         return OnyxUserInfo.model_validate(data)
 
     async def points_total(self) -> Decimal:
-        data = await self._authed_get("/me/points/overview")
+        data = await self.points_overview()
         return Decimal(str(data.get("totalPoints", 0)))
+
+    async def points_overview(self) -> dict:
+        return await self._authed_get("/me/points/overview")
+
+    async def points(self) -> list[OnyxPoint]:
+        return OnyxPoint.from_overview(await self.points_overview())
 
     @ttl_cache(300)
     async def _fetch_order_oids(self) -> frozenset[int]:

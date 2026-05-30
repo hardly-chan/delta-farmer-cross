@@ -2,24 +2,20 @@
 # Copyright (c) vladkens | MIT License | Built by humans, blamed on AI
 import asyncio
 from collections import defaultdict
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal
-from functools import partial
 from typing import TypeVar
 
 from clients.hyena import HyenaClient
 from lib.cli import create_cli, run_app
 from lib.store import DataStore
 from lib.table import AutoTable, Column, PeriodRow, render_stats
-from lib.utils import gather_accs, parse_filter, short_addr, to_period_week
+from lib.utils import gather_accs, parse_filter, short_addr
 from strategy import StrategyConfig
 from strategy.runner import close_all, print_positions, run_groups
 
 T = TypeVar("T")
 DD = defaultdict[str, defaultdict[str, T]]
-
-GENESIS = datetime(2025, 12, 4, tzinfo=UTC)
-to_week = partial(to_period_week, genesis=GENESIS)
 
 
 def _normalize_symbols(symbols: list[str]) -> list[str]:
@@ -72,9 +68,8 @@ async def sync_rewards(acc: HyenaClient, ttl: int) -> list[dict]:
             {
                 "id": h.id,
                 "enaxPoints": h.enaxPoints,
-                "period": to_week(
-                    GENESIS + timedelta(weeks=int(h.id.removeprefix("reward-week-")) - 1)
-                ),
+                "period": HyenaClient.to_week_label(h.start_window),
+                "start_window": h.start_window,
             }
             for h in rewards.history
         ]
@@ -98,7 +93,7 @@ async def print_stats(
     for acc, fills in zip(accs, fills_list):
         for fill in fills:
             dt = datetime.fromtimestamp(fill["time"] / 1000, tz=UTC)
-            gtrades[to_week(dt)][acc.name].append(fill)
+            gtrades[HyenaClient.to_week_label(dt)][acc.name].append(fill)
 
     for acc, rewards in zip(accs, rewards_list):
         for h in rewards:
