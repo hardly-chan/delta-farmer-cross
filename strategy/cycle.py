@@ -16,6 +16,7 @@ from lib.utils import round_to_tick_size
 
 from .execution import close_all
 from .models import StrategyConfig, TradingClient
+from .symbols import filter_exchange_symbols
 from .trade import DeltaTrade, DeltaTradeSummary, plan_delta_trades
 
 USD_TICK = Decimal("0.01")
@@ -249,17 +250,12 @@ class DeltaStrategy:
         open_at = now + timedelta(seconds=int(self.cfg.entry_gate_wait) + seq_limit + drift)
         close_at = open_at + timedelta(seconds=int(duration) + seq_limit)
 
-        by_exchange: dict[str, TradingClient] = {a.exchange: a for a in self.accounts}
-        pairs = [(s, c) for s in self.cfg.symbols for c in by_exchange.values()]
-
-        async def check(symbol: str, client: TradingClient) -> tuple[str, bool]:
+        async def check(client: TradingClient, symbol: str) -> bool:
             ok1 = await client.is_symbol_tradeable(symbol, open_at)
             ok2 = await client.is_symbol_tradeable(symbol, close_at, reduce_only=True)
-            return symbol, ok1 and ok2
+            return ok1 and ok2
 
-        results = await asyncio.gather(*[check(s, c) for s, c in pairs])
-        failed = {s for s, ok in results if not ok}
-        return [s for s in self.cfg.symbols if s not in failed]
+        return await filter_exchange_symbols(self.accounts, self.cfg.symbols, check)
 
     def basket_combined_roi(self, summaries: list[DeltaTradeSummary]) -> Decimal | None:
         total_pnl = sum((s.total_pnl for s in summaries), Decimal(0))

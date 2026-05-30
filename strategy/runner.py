@@ -17,6 +17,7 @@ from lib.logger import logger
 
 from .cycle import DeltaStrategy
 from .models import Position, StrategyConfig, TradingClient
+from .symbols import ensure_exchange_symbols
 
 
 async def print_positions(accs: Sequence[TradingClient]) -> None:
@@ -161,6 +162,14 @@ async def _warmup_all(accs: Sequence[TradingClient]) -> None:
         raise AppError(f"Not registered: {', '.join(failed)}")
 
 
+async def _check_symbols(cfg: StrategyConfig, accs: Sequence[TradingClient]) -> None:
+    async def symbol_exists(acc: TradingClient, symbol: str) -> bool:
+        await acc.get_lot_size(symbol)
+        return True
+
+    await ensure_exchange_symbols(accs, cfg.symbols, symbol_exists)
+
+
 async def _run_group(
     cfg: StrategyConfig,
     name: str,
@@ -215,6 +224,7 @@ async def _balance_sorted(accs: Sequence[TradingClient]) -> list[TradingClient]:
 async def run_groups(cfg: StrategyConfig, accs: Sequence[TradingClient]) -> None:
     cfg, accs = _check_cfg(cfg, accs)
     await _warmup_all(accs)
+    await _check_symbols(cfg, accs)
 
     tg.start()
     telemetry.track(

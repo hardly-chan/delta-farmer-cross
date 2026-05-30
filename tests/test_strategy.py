@@ -192,6 +192,92 @@ def test_check_cfg_rejects_symbol_pool_smaller_than_symbols_per_trade():
         _check_cfg(cfg, [MockClient("a"), MockClient("b")])
 
 
+async def test_check_symbols_rejects_invalid_startup_symbol():
+    from lib.errors import AppError
+    from strategy.runner import _check_symbols
+
+    class SymbolFailClient(MockClient):
+        async def get_lot_size(self, symbol: str):
+            if symbol == "SPI":
+                raise RuntimeError("Symbol not found: symbol=SPI product_id=None")
+            return await super().get_lot_size(symbol)
+
+    cfg = make_cfg(symbols=["BTC", "SPI"])
+
+    with pytest.raises(AppError) as exc:
+        await _check_symbols(cfg, [SymbolFailClient("a"), MockClient("b")])
+
+    msg = str(exc.value)
+    assert msg == "Invalid configured symbols: SPI is not available on mock"
+    assert "SymbolFailClient" not in msg
+    assert "RuntimeError" not in msg
+    assert "/a" not in msg
+
+
+async def test_check_symbols_checks_unique_symbols_per_unique_exchange():
+    from strategy.runner import _check_symbols
+
+    class CountingClient(MockClient):
+        def __init__(self, name: str, exchange: str):
+            super().__init__(name)
+            self.exchange = exchange
+            self.seen_symbols: list[str] = []
+
+        async def get_lot_size(self, symbol: str):
+            self.seen_symbols.append(symbol)
+            return await super().get_lot_size(symbol)
+
+    ex1a = CountingClient("ex1a", "ex1")
+    ex1b = CountingClient("ex1b", "ex1")
+    ex2 = CountingClient("ex2", "ex2")
+    cfg = make_cfg(symbols=["BTC", "ETH", "BTC"])
+
+    await _check_symbols(cfg, [ex1a, ex1b, ex2])
+
+    assert ex1a.seen_symbols == ["BTC", "ETH"]
+    assert ex1b.seen_symbols == []
+    assert ex2.seen_symbols == ["BTC", "ETH"]
+
+
+async def test_filter_exchange_symbols_keeps_symbols_true_on_every_exchange():
+    from strategy.symbols import filter_exchange_symbols
+
+    class CountingClient(MockClient):
+        def __init__(self, name: str, exchange: str):
+            super().__init__(name)
+            self.exchange = exchange
+            self.seen_symbols: list[str] = []
+
+    ex1a = CountingClient("ex1a", "ex1")
+    ex1b = CountingClient("ex1b", "ex1")
+    ex2 = CountingClient("ex2", "ex2")
+
+    async def check(acc: TradingClient, symbol: str) -> bool:
+        client = cast(CountingClient, acc)
+        client.seen_symbols.append(symbol)
+        return symbol != "ETH" or client.exchange != "ex2"
+
+    result = await filter_exchange_symbols([ex1a, ex1b, ex2], ["BTC", "ETH", "BTC"], check)
+
+    assert result == ["BTC"]
+    assert ex1a.seen_symbols == ["BTC", "ETH"]
+    assert ex1b.seen_symbols == []
+    assert ex2.seen_symbols == ["BTC", "ETH"]
+
+
+async def test_ensure_exchange_symbols_rejects_false_predicate():
+    from lib.errors import AppError
+    from strategy.symbols import ensure_exchange_symbols
+
+    acc = MockClient("acc")
+
+    async def check(_acc: TradingClient, symbol: str) -> bool:
+        return symbol != "SPI"
+
+    with pytest.raises(AppError, match="SPI is not available on mock"):
+        await ensure_exchange_symbols([acc], ["BTC", "SPI"], check)
+
+
 def make_trade(
     symbol: str = "BTC",
     lead_client: MockClient | None = None,
