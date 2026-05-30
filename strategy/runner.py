@@ -1,6 +1,7 @@
 # delta-farmer | https://github.com/vladkens/delta-farmer
 # Copyright (c) vladkens | MIT License | Small plans, fewer surprises
 import asyncio
+import os
 import random
 from collections.abc import Sequence
 from decimal import Decimal
@@ -18,6 +19,10 @@ from lib.logger import logger
 from .cycle import DeltaStrategy
 from .models import Position, StrategyConfig, TradingClient
 from .symbols import ensure_exchange_symbols
+
+
+def _env_enabled(name: str) -> bool:
+    return (os.environ.get(name) or "").lower() in ("1", "true", "yes", "on")
 
 
 async def print_positions(accs: Sequence[TradingClient]) -> None:
@@ -231,11 +236,24 @@ async def run_groups(cfg: StrategyConfig, accs: Sequence[TradingClient]) -> None
         "trade_started",
         {
             "account_count": len(accs),
+            "symbols_count": len(cfg.symbols),
+            "symbols_per_trade": cfg.symbols_per_trade,
+            "trade_size_mode": "pct" if cfg.trade_size_pct is not None else "usd",
             "use_limit": cfg.use_limit,
+            "limit_wait_retries": cfg.limit_wait_retries,
+            "limit_market_fallback": cfg.limit_market_fallback,
+            "entry_gate_enabled": cfg.max_entry_spread_pct is not None,
+            "entry_gate_wait": int(cfg.entry_gate_wait),
+            "entry_gate_poll": int(cfg.entry_gate_poll),
             "group_mode": cfg.group_size is not None,
+            "group_enabled": cfg.group_size is not None,
+            "group_size": cfg.group_size,
             "regroup_interval": cfg.regroup_interval is not None,
+            "regroup_enabled": cfg.regroup_interval is not None,
             "first_as_prime": cfg.first_as_prime,
+            "max_failures_enabled": cfg.max_failures > 0,
             "telegram_enabled": tg.enabled(),
+            "log_file_enabled": _env_enabled("DF_LOG_FILE"),
         },
     )
 

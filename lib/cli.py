@@ -32,6 +32,19 @@ def _env_enabled(name: str) -> bool:
     return (os.environ.get(name) or "").lower() in ("1", "true", "yes", "on")
 
 
+def _telemetry_props(args: argparse.Namespace) -> dict[str, Any]:
+    if args.command == "stats":
+        return {
+            "stats_group": args.group,
+            "stats_force": args.force,
+        }
+    if args.command == "competition":
+        return {
+            "competition_join": bool(getattr(args, "join", False)),
+        }
+    return {}
+
+
 class HelpFormatter(argparse.HelpFormatter):
     def _iter_indented_subactions(self, action):
         for subaction in super()._iter_indented_subactions(action):
@@ -195,8 +208,13 @@ async def create_cli(
         if notice := await latest_release_notice(VERSION):
             eprint(notice)
 
-    telemetry.init(exchange=name, command=args.command or "", version=VERSION, release=IS_RELEASE)
-    telemetry.track("$pageview", {"$current_url": f"cli://delta-farmer/{name}/{args.command}"})
+    telemetry.init(
+        exchange=name,
+        command=args.command or "",
+        version=VERSION,
+        release=IS_RELEASE,
+        props=_telemetry_props(args),
+    )
 
     if args.command is None:
         cli.print_help()

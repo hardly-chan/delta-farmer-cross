@@ -12,6 +12,7 @@ from rich.box import SIMPLE, Box
 from rich.console import JustifyMethod
 from rich.table import Table
 
+from . import telemetry
 from .logger import logger
 
 _TBD = object()  # sentinel: not enough data to compute
@@ -189,6 +190,14 @@ def render_stats(
     pprice_fmt: str = "{:,.2f}",
     min_vol: int = 1_000,
 ) -> None:
+    telemetry.track(
+        "stats_rendered",
+        {
+            "stats_selected_period_count": len(periods_to_show),
+            "stats_available_period_count": len(periods),
+        },
+    )
+
     cols: list[Column] = [
         Column("Account", justify="left"),
         Column("Trades", "{:,}", total=sum),

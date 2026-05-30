@@ -63,6 +63,7 @@ def init(
     command: str,
     version: str = "",
     release: bool = True,
+    props: dict | None = None,
     flush_interval=120,
     heartbeat_interval=3600,
 ) -> None:
@@ -78,6 +79,7 @@ def init(
         "$current_url": f"cli://{APP_ID}/{exchange}/{command}",
     }
     _context.update(pld)
+    _context.update(props or {})
     track("$pageview")
 
     try:
