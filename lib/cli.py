@@ -8,7 +8,7 @@ import re
 import subprocess
 import sys
 import tomllib
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -152,7 +152,12 @@ def _load_accounts_config(filepath: str) -> list[AccountConfig]:
         sys.exit(1)
 
 
-async def create_cli(name: str, config_path: str, sec_fields: list[str]) -> argparse.Namespace:
+async def create_cli(
+    name: str,
+    config_path: str,
+    sec_fields: list[str],
+    custom_commands: dict[str, Callable[[argparse.ArgumentParser], None]] | None = None,
+) -> argparse.Namespace:
     cli = argparse.ArgumentParser(prog=name, formatter_class=HelpFormatter)
 
     sub = cli.add_subparsers(dest="command")
@@ -163,6 +168,9 @@ async def create_cli(name: str, config_path: str, sec_fields: list[str]) -> argp
     sub.add_parser("proxy", help="Check configured proxies")
     sub.add_parser("clean", help="Delete cached data")
     sub.add_parser("tgtest", help=argparse.SUPPRESS)
+    for command, setup in (custom_commands or {}).items():
+        parser = sub.add_parser(command, help=f"Run {command} tools")
+        setup(parser)
 
     stats_parser = sub.add_parser("stats", help="Show trading stats")
     stats_parser.add_argument(

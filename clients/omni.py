@@ -76,6 +76,24 @@ class OmniLeaderboardSelf(BaseModel):
     place: int | None = None
 
 
+class OmniCompetitionUser(BaseModel):
+    leaderboard_name: str | None = None
+    volume_total: Decimal | None = None
+    volume_rank: int | None = None
+    pnl_total: Decimal | None = None
+    pnl_rank: int | None = None
+    roi_total: Decimal | None = None
+    roi_rank: int | None = None
+
+
+class OmniCompetitionStatus(BaseModel):
+    start_time: datetime
+    end_time: datetime
+    volume_threshold: Decimal
+    ongoing: bool
+    user: OmniCompetitionUser | None = None
+
+
 # MARK: Client
 
 
@@ -453,6 +471,13 @@ class OmniClient:
         res = await self._call("GET", "/leaderboard/v2", params=params)
         data = res.get("result", {}).get("self", {})
         return OmniLeaderboardSelf(**data)
+
+    async def competition_status(self) -> OmniCompetitionStatus:
+        res = await self._call("GET", "/competition/status")
+        return OmniCompetitionStatus(**res)
+
+    async def competition_opt_in(self) -> None:
+        await self._call("POST", "/competition/opt_in")
 
     async def profile(self) -> ProfileInfo:
         # Omni have Cloudflare protection, so do it one by one to avoid triggering anti-bot

@@ -1,12 +1,14 @@
 # delta-farmer | https://github.com/vladkens/delta-farmer
 # Copyright (c) vladkens | MIT License | No AI was harmed making this
+import argparse
 import asyncio
 from collections import defaultdict
 from datetime import datetime
 from decimal import Decimal
 
-from clients.omni import OmniClient, OmniPoint
+from clients.omni import OmniClient, OmniCompetitionStatus, OmniPoint
 from lib.cli import create_cli, run_app
+from lib.http import ApiError
 from lib.store import DataStore
 from lib.table import AutoTable, Column, PeriodRow, render_stats
 from lib.utils import gather_accs, parse_filter, short_addr, to_period_day
@@ -116,11 +118,111 @@ async def print_stats(accs: list[OmniClient], period="week", filter_period="all"
     render_stats(periods_data, periods_to_show, fees=False, points_fmt="{:,.2f}")
 
 
+def setup_competition_cli(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--join", action="store_true", help="Join competition with all accounts")
+
+
+CompetitionRow = tuple[OmniClient, OmniCompetitionStatus | None, str | None]
+
+
+def _print_competition_summary(status: OmniCompetitionStatus | None) -> None:
+    if status is None:
+        print("No Omni competition status available.")
+        return
+
+    if not status.ongoing:
+        print(
+            f"No active Omni competition. Last/next window: "
+            f"{status.start_time:%Y-%m-%d %H:%M UTC} → {status.end_time:%Y-%m-%d %H:%M UTC}."
+        )
+        return
+
+    print(
+        f"Active Omni competition: "
+        f"{status.start_time:%Y-%m-%d %H:%M UTC} → {status.end_time:%Y-%m-%d %H:%M UTC}; "
+        f"eligibility threshold ${status.volume_threshold:,.0f} volume."
+    )
+
+
+def _competition_status_table(rows: list[CompetitionRow]) -> None:
+    first_status = next((status for _acc, status, _error in rows if status is not None), None)
+    _print_competition_summary(first_status)
+
+    tbl = AutoTable(
+        Column("", justify="left"),
+        Column("Account", justify="left"),
+        Column("Address", justify="left"),
+        Column("Joined", justify="left"),
+        Column("Eligible", justify="left"),
+        Column("Volume", "{:,.0f}"),
+        Column("Volume Place", "{:,}"),
+        Column("PnL", "{:,.2f}"),
+        Column("PnL Place", "{:,}"),
+        Column("ROI", "{:.2f}%"),
+        Column("ROI Place", "{:,}"),
+    )
+
+    for acc, status, error in rows:
+        user = status.user if status else None
+        volume = user.volume_total if user and user.volume_total is not None else Decimal(0)
+        eligible = bool(status is not None and volume >= status.volume_threshold)
+        tbl.add_row(
+            "✗" if error else "✓",
+            acc.name,
+            short_addr(acc.address),
+            "yes" if user else "no",
+            "yes" if eligible else "no" if status and status.ongoing else "n/a",
+            volume if user else None,
+            user.volume_rank if user else None,
+            user.pnl_total if user else None,
+            user.pnl_rank if user else None,
+            user.roi_total if user else None,
+            user.roi_rank if user else None,
+        )
+
+    tbl.print()
+
+    needs_join = any(status and status.ongoing and status.user is None for _a, status, _e in rows)
+    if needs_join:
+        print("* Some accounts have not joined. Run `uv run apps/omni.py competition --join`.")
+
+
+async def print_competition_status(accs: list[OmniClient]) -> None:
+    async def row(acc: OmniClient):
+        try:
+            await acc.warmup()
+            return acc, await acc.competition_status(), None
+        except ApiError as e:
+            return acc, None, str(e)
+
+    _competition_status_table(await gather_accs(accs, row))
+
+
+async def join_competition(accs: list[OmniClient]) -> None:
+    async def row(acc: OmniClient):
+        try:
+            await acc.warmup()
+            status = await acc.competition_status()
+            if status.ongoing:
+                await acc.competition_opt_in()
+                status = await acc.competition_status()
+            return acc, status, None
+        except ApiError as e:
+            return acc, None, str(e)
+
+    _competition_status_table(await gather_accs(accs, row))
+
+
 # MARK: Main
 
 
 async def main():
-    cli = await create_cli("omni", "configs/omni.toml", ["privkey"])
+    cli = await create_cli(
+        "omni",
+        "configs/omni.toml",
+        ["privkey"],
+        custom_commands={"competition": setup_competition_cli},
+    )
     cfg = StrategyConfig.load(cli.config)
 
     accs = [(OmniClient.from_config(x), x.enabled) for x in cfg.accounts]
@@ -137,6 +239,11 @@ async def main():
             await run_groups(cfg, act_accs)
         case "positions":
             await print_positions(act_accs)
+        case "competition":
+            if cli.join:
+                await join_competition(all_accs)
+            else:
+                await print_competition_status(all_accs)
 
 
 if __name__ == "__main__":
