@@ -358,10 +358,14 @@ class OnyxClient(HyperLiquidClient):
     # MARK: Profile
 
     async def profile(self) -> ProfileInfo:
-        bal, info, pts = await asyncio.gather(self.balance(), self.user_info(), self.points_total())
+        bal, info, pts, mode = await asyncio.gather(
+            self.balance(), self.user_info(), self.points_total(), self.account_mode()
+        )
         s = info.accountSummary
 
         pnl = s.totalPnl
 
         addr = utils.short_addr(self.address)
-        return ProfileInfo(addr=addr, balance=bal, volume=s.onyxVolume, pnl=pnl, points=pts)
+        return ProfileInfo(
+            addr=addr, balance=bal, volume=s.onyxVolume, pnl=pnl, points=pts, mode=mode
+        )

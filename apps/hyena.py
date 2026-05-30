@@ -7,6 +7,7 @@ from decimal import Decimal
 from typing import TypeVar
 
 from clients.hyena import HyenaClient
+from clients.hyperliquid import warn_legacy_hyperliquid_accounts
 from lib.cli import create_cli, run_app
 from lib.store import DataStore
 from lib.table import AutoTable, Column, PeriodRow, render_stats
@@ -36,19 +37,24 @@ async def print_info(accs: list[HyenaClient]):
         Column("P/Price", "{:,.4f}", compute=lambda r: r["Burn"] / r["Points"]),
         Column("Balance", "{:,.2f}", total=sum),
     )
+    legacy_accounts: list[str] = []
 
     async def row(acc: HyenaClient):
         await acc.warmup()
         p = await acc.profile() if await acc.registered() else None
         a = short_addr(acc.address)
+        if p and p.mode != "unifiedAccount":
+            legacy_accounts.append(acc.name)
         if not p:
             return ("✗", acc.name, a, 0, 0, 0, 0)
+
         return ("✓", acc.name, a, p.volume, -p.pnl, p.points, p.balance)
 
     for r in await gather_accs(accs, row):
         tbl.add_row(*r)
 
     tbl.print()
+    warn_legacy_hyperliquid_accounts(legacy_accounts, "Hyena")
 
 
 async def sync_fills(acc: HyenaClient, ttl: int) -> list[dict]:

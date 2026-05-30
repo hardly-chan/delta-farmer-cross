@@ -3,6 +3,7 @@
 import asyncio
 import struct
 import time
+from collections.abc import Sequence
 from datetime import datetime
 from decimal import Decimal
 from math import floor, log10
@@ -271,6 +272,14 @@ class HyperLiquidClient:
         rep = await self._info(type="clearinghouseState", user=self.address)
         return Decimal(str(rep["marginSummary"]["accountValue"]))
 
+    async def account_mode(self) -> str:
+        try:
+            data = await self._info(type="userAbstraction", user=self.address)
+        except ApiError:
+            return "unknown"
+
+        return data if isinstance(data, str) else "unknown"
+
     async def get_leverage(self, symbol: str) -> int | None:
         dex, coin = self._resolve(symbol)
         rep = await self._info(
@@ -413,12 +422,10 @@ class HyperLiquidClient:
         return await self._place_order(symbol, side, qty, price, "Gtc", reduce_only)
 
     async def get_order(self, order_id: str) -> Order | None:
-        dex = self.dex_prefix
         rep = await self._info(
             type="orderStatus",
             user=self.address,
             oid=int(order_id),
-            **({} if not dex else {"dex": dex}),
         )
         if rep.get("status") != "order":
             return None
@@ -487,3 +494,14 @@ class HyperLiquidClient:
 
         addr = utils.short_addr(self.address)
         return ProfileInfo(addr=addr, balance=bal, volume=volume, pnl=pnl, points=Decimal(0))
+
+
+def warn_legacy_hyperliquid_accounts(accounts: Sequence[str], app_name: str) -> None:
+    if not accounts:
+        return
+
+    names = ", ".join(accounts)
+    logger.warning(
+        f"Hyperliquid Unified Account is recommended. "
+        f"Migrate these accounts in {app_name}/Hyperliquid UI before trading: {names}"
+    )

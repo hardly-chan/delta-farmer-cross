@@ -188,10 +188,11 @@ class HyenaClient(HyperLiquidClient):
     # MARK: Profile
 
     async def profile(self) -> ProfileInfo:
-        bal, rewards, fills = await asyncio.gather(
+        bal, rewards, fills, mode = await asyncio.gather(
             self.balance(),
             self.rewards(),
             self.fills(),
+            self.account_mode(),
         )
         # HyperLiquid /info portfolio is overall HIP-3 PnL, not Hyena-only.
         # Use Hyena trades data so `info` matches Hyena `stats` burn reporting.
@@ -201,4 +202,4 @@ class HyenaClient(HyperLiquidClient):
 
         addr = utils.short_addr(self.address)
         epts = rewards.balance.enaxPoints
-        return ProfileInfo(addr=addr, balance=bal, volume=volume, pnl=pnl, points=epts)
+        return ProfileInfo(addr=addr, balance=bal, volume=volume, pnl=pnl, points=epts, mode=mode)

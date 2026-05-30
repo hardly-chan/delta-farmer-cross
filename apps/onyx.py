@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TypeVar
 
+from clients.hyperliquid import warn_legacy_hyperliquid_accounts
 from clients.onyx import OnyxClient, OnyxPoint
 from lib.cli import create_cli, run_app
 from lib.store import DataStore
@@ -61,6 +62,7 @@ async def print_info(accs: list[OnyxClient], force: bool = False):
     )
 
     vol_rows: list[tuple[Decimal, Decimal]] = []
+    legacy_accounts: list[str] = []
 
     async def row(acc: OnyxClient):
         await acc.warmup()
@@ -74,6 +76,8 @@ async def print_info(accs: list[OnyxClient], force: bool = False):
         burn = _calc_burn(fills)
         fills_vol = _calc_vol(fills)
         vol_rows.append((p.volume, fills_vol))
+        if p.mode != "unifiedAccount":
+            legacy_accounts.append(acc.name)
         return ("✓", acc.name, a, p.volume, burn, p.points, p.balance)
 
     for r in await gather_accs(accs, row):
@@ -89,6 +93,7 @@ async def print_info(accs: list[OnyxClient], force: bool = False):
             "* Fills computed indirectly (no native Onyx API). "
             f"Volume diff vs Arjuna: {diff:+,.0f} ({pct:+.2f}%)"
         )
+    warn_legacy_hyperliquid_accounts(legacy_accounts, "Onyx")
 
 
 async def print_stats(
