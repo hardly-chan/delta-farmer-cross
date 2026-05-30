@@ -153,6 +153,7 @@ uv run apps/<app>.py trade          # Start automated trading
 uv run apps/<app>.py close          # Close all open positions
 uv run apps/<app>.py info           # View account balances & points
 uv run apps/<app>.py positions      # View current open positions
+uv run apps/<app>.py proxy          # Check configured proxies
 
 # Statistics
 uv run apps/<app>.py stats          # Current period stats (cached 1h)
@@ -197,6 +198,16 @@ uv run scripts/weekly.py --burn             # Burn pivot by ISO week and exchang
 uv run scripts/weekly.py --help             # Full weekly report help
 ```
 
+### Experimental: Omni competition
+
+Omni has experimental competition helpers. The command checks the active competition window,
+per-account join status, eligibility volume, and leaderboard places.
+
+```bash
+uv run apps/omni.py competition        # Show competition status
+uv run apps/omni.py competition --join # Opt in all configured accounts
+```
+
 ---
 
 ## Configuration Reference
@@ -208,8 +219,8 @@ All settings live in your `configs/<app>.toml` file. Here is every available par
 | Parameter           | Default  | Description                                                                                                                                              |
 | ------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `leverage`          | `10`     | Leverage multiplier (1–49). Set it to the **lowest** max leverage across all your chosen symbols.                                                        |
-| `symbols`           | required | Candidate trading pairs, e.g. `["BTC"]` or `["BTC", "ETH"]`. Check the exchange UI for available symbols.                                                |
-| `symbols_per_trade` | `1`      | How many currently tradeable symbols to sample per cycle. `1` = classic mode; `2`–`4` = basket mode. Must be no larger than `symbols`.                   |
+| `symbols`           | required | Trading pairs, e.g. `["BTC"]` or `["BTC", "ETH"]`. Check the exchange UI for available symbols.                                                          |
+| `symbols_per_trade` | `1`      | How many symbols to trade per cycle. `1` = classic mode and may sample one symbol from the list; `2`–`4` = basket mode and must match the length of `symbols`. |
 | `use_limit`         | `false`  | If `true`, the prime account opens with a limit order instead of a market order — reduces fees.                                                          |
 | `first_as_prime`    | `false`  | If `true`, the first account in the list is always the prime (limit-side). If `false`, it rotates randomly each cycle. Ignored when `group_size` is set. |
 
@@ -250,6 +261,9 @@ Maximum wait for one limit order is `limit_wait * (1 + limit_wait_retries)`. Hig
 | -------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `position_roi_limit` | `0.8`   | Emergency-close the full cycle if any single position reaches ±80% ROI.                                                                                     |
 | `combined_roi_limit` | `0.1`   | Emergency-close if the combined basket ROI reaches ±10%.                                                                                                    |
+| `max_entry_spread_pct` | `0.25` | Wait before opening if estimated entry spread/depth is worse than this percent. Set to `null` to disable the entry gate.                                  |
+| `entry_gate_wait` | `"5m"` | Maximum time to wait for acceptable entry spread/depth before skipping the cycle.                                                                                |
+| `entry_gate_poll` | `"3s"` | How often to re-check entry quality while waiting.                                                                                                               |
 | `max_failures`       | `0`     | Stop the strategy after this many consecutive cycle failures. `0` = never stop — retries indefinitely with exponential backoff (up to 1h between attempts). |
 
 ### Grouped trading
@@ -287,7 +301,9 @@ Add a `[telegram]` block to enable notifications.
 
 ### Classic mode (single symbol)
 
-One cycle trades one symbol: one account goes long, the other goes short.
+One cycle trades one symbol: one account goes long, the other goes short. If you configure
+multiple symbols with `symbols_per_trade = 1`, the bot samples one currently tradeable symbol
+per cycle.
 
 ```toml
 symbols = ["BTC"]
@@ -307,8 +323,7 @@ trade_size_usd = { min = 140, max = 160 }
 
 Rules:
 
-- `symbols` is the candidate pool; `symbols_per_trade` is how many currently tradeable symbols are selected per cycle
-- Configure at least `symbols_per_trade` symbols, and add alternatives for market-hour assets so cycles do not skip when too few markets are open
+- `symbols_per_trade` must exactly match the number of entries in `symbols`
 - Maximum 4 symbols per trade
 - Safety exits apply both per-position and combined basket ROI
 
@@ -332,7 +347,7 @@ Rules:
 
 ## Safety Checks
 
-Before opening a cycle, the bot filters the configured `symbols` pool to markets that are tradeable for the planned entry and close window on every selected account. Nado stock and commodity markets use exchange market-hours and trading-status data; if fewer than `symbols_per_trade` symbols are available, the cycle logs a warning and waits for the next cooldown instead of opening trades. Symbols without market-hours metadata are treated as 24/7.
+Before opening a cycle, the bot filters configured symbols to markets that are tradeable for the planned entry and close window on every selected account. Nado stock and commodity markets use exchange market-hours and trading-status data; if fewer than `symbols_per_trade` symbols are available, the cycle logs a warning and waits for the next cooldown instead of opening trades. Symbols without market-hours metadata are treated as 24/7.
 
 Every `trade_heartbeat` interval (default 15 seconds), the bot checks:
 
@@ -426,8 +441,8 @@ uv run apps/omni.py -c configs/omni-set2.toml trade
 # Pull latest changes
 git pull
 
-# Update dependencies
-uv sync
+# Install the locked dependency set
+uv sync --locked
 
 # Restart trading
 uv run apps/<app>.py trade
@@ -447,39 +462,6 @@ uv run apps/<app>.py trade
 Delta-farmer collects anonymous usage statistics (exchange name, command used, technical config flags) to understand adoption and popular features. No wallet addresses, balances, or strategy parameters are ever sent.
 
 Set `DF_TELEMETRY=0` to opt out completely.
-
----
-
-## Weekly Report
-
-Sync stats for all exchanges first, then run the report:
-
-```bash
-uv run apps/<app>.py stats --force   # refresh each exchange
-
-uv run scripts/weekly.py             # all exchanges, latest week
-uv run scripts/weekly.py -1          # one week back
-uv run scripts/weekly.py -e Hyena    # one exchange, all periods
-uv run scripts/weekly.py --burn      # burn only, all exchanges over time
-```
-
----
-
-## Known Issues
-
-### SSL certificate error on macOS
-
-```
-urllib.error.URLError: <urlopen error [SSL: CERTIFICATE_VERIFY_FAILED]>
-```
-
-Caused by a bug in `curl-cffi` v0.14. Fix:
-
-```bash
-uv add curl-cffi==0.15.0b4 --prerelease allow && uv sync
-```
-
----
 
 ## Risk Disclaimer
 

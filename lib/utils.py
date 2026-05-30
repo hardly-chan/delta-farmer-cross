@@ -169,8 +169,8 @@ def json_dump(filepath: str, data: object):
 
 
 # inspired by https://pkg.go.dev/time#ParseDuration
-DURATION_RE = re.compile(r"(\d+(?:\.\d+)?)(ms|s|m|h)")
-UNITS_VALUE = {"h": 3600, "m": 60, "s": 1, "ms": 0.001}
+DURATION_RE = re.compile(r"(\d+(?:\.\d+)?)(ms|s|m|h|d)")
+UNITS_VALUE = {"d": 86400, "h": 3600, "m": 60, "s": 1, "ms": 0.001}
 UNITS_ORDER = list(UNITS_VALUE.keys())
 
 
