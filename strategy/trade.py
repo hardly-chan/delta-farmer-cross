@@ -32,6 +32,7 @@ async def _fill_limit_order(
         reduce_only=reduce_only,
         timeout=cfg.limit_wait,
         use_market_fallback=cfg.limit_market_fallback,
+        max_wait_retries=cfg.limit_wait_retries,
     )
 
 

@@ -189,6 +189,7 @@ class StrategyConfig(BaseModel):
     max_failures: int = Field(0, ge=0)  # 0 = infinite retries
     use_limit: bool = False
     limit_wait: DurationSec = DurationSec("90s")
+    limit_wait_retries: int = Field(9, ge=0)
     limit_market_fallback: bool = True
     max_entry_spread_pct: Decimal | None = Field(Decimal("0.25"), gt=0)
     entry_gate_wait: DurationSec = DurationSec("5m")
@@ -219,6 +220,11 @@ class StrategyConfig(BaseModel):
         if dupes:
             raise ValueError(f"duplicate account names: {', '.join(sorted(dupes))}")
         return self
+
+    @property
+    def limit_wait_budget(self) -> int:
+        """Worst-case wait for one limit order before fallback."""
+        return int(self.limit_wait) * (1 + self.limit_wait_retries)
 
     @classmethod
     def load(cls, filepath: str) -> "StrategyConfig":

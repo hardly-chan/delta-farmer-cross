@@ -245,8 +245,9 @@ class DeltaStrategy:
 
     async def _tradeable_symbols(self, duration: int) -> list[str]:
         now = datetime.now(UTC)
-        drift = int(self.cfg.limit_wait) * 2
-        seq_limit = int(self.cfg.limit_wait) * self.cfg.symbols_per_trade
+        limit_wait = self.cfg.limit_wait_budget if self.cfg.use_limit else 0
+        drift = limit_wait * 2
+        seq_limit = limit_wait * self.cfg.symbols_per_trade
         open_at = now + timedelta(seconds=int(self.cfg.entry_gate_wait) + seq_limit + drift)
         close_at = open_at + timedelta(seconds=int(duration) + seq_limit)
 

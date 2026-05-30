@@ -119,13 +119,27 @@ class LimitOrderWaitState:
     order_started_at: float
     wait_window_started_at: float
     last_log_at: float
+    max_wait_retries: int
     bbo_stable_extensions: int = 0
     last_stable_drift: Decimal | None = None
 
     @classmethod
-    def start(cls) -> "LimitOrderWaitState":
+    def start(cls, max_wait_retries: int) -> "LimitOrderWaitState":
         now = time.time()
-        return cls(order_started_at=now, wait_window_started_at=now, last_log_at=now)
+        return cls(
+            order_started_at=now,
+            wait_window_started_at=now,
+            last_log_at=now,
+            max_wait_retries=max_wait_retries,
+        )
+
+    @property
+    def can_extend_bbo_stable(self) -> bool:
+        return self.bbo_stable_extensions < self.max_wait_retries
+
+    @property
+    def retry_progress(self) -> str:
+        return f"{self.bbo_stable_extensions}/{self.max_wait_retries}"
 
     def timeout_started_at(self, filled_since: float | None) -> float:
         return filled_since or self.wait_window_started_at
@@ -148,10 +162,7 @@ class LimitOrderWaitState:
         fill_pct = f" ({order.filled / order.size:.0%})" if order.filled > 0 else ""
         extra = ""
         if self.bbo_stable_extensions and self.last_stable_drift is not None:
-            extra = (
-                f" (BBO stable drift={self.last_stable_drift:.3%}, "
-                f"extended {self.bbo_stable_extensions}x)"
-            )
+            extra = f" (BBO stable drift={self.last_stable_drift:.3%}, retry {self.retry_progress})"
 
         self.last_log_at = now
         elapsed = format_duration(now - self.order_started_at)
@@ -166,6 +177,24 @@ async def _fetch_limit_price(
     return round_to_tick_size(bid if side == "bid" else ask, tick_size)
 
 
+async def _cancel_or_market_fallback(
+    client: TradingClient,
+    order: Order,
+    side: Side,
+    symbol: str,
+    reduce_only: bool,
+    use_market_fallback: bool,
+    timeout,
+) -> Order | None:
+    log = logger.bind(account=client.name)
+    await client.cancel_order(order)
+    remaining = order.size - order.filled
+    if use_market_fallback and remaining > 0:
+        log.debug(f"Limit timeout → market fallback {side} {remaining} {symbol}")
+        return await client.market_order(symbol, side, remaining, reduce_only)
+    raise RuntimeError(f"Limit {symbol} timed out after {timeout}s, no fallback")
+
+
 async def fill_limit_order(
     client: TradingClient,
     symbol: str,
@@ -174,6 +203,7 @@ async def fill_limit_order(
     reduce_only=False,
     timeout=60,
     use_market_fallback=True,
+    max_wait_retries: int = 9,
 ) -> Order | None:
     """Place limit order and wait for fill with optional market fallback."""
     tick_size = await client.get_tick_size(symbol)
@@ -186,7 +216,7 @@ async def fill_limit_order(
         return order  # already filled (e.g. exchange falls back to market internally)
 
     order_id = order.id
-    wait = LimitOrderWaitState.start()
+    wait = LimitOrderWaitState.start(max_wait_retries)
     filled_since = None
     poll_delay = 0.25  # starts at 250ms, grows to ~3s
 
@@ -219,6 +249,16 @@ async def fill_limit_order(
             current_price = await _fetch_limit_price(client, symbol, side, tick_size)
             drift = abs(current_price - price) / price
             if drift <= _LIMIT_PRICE_DRIFT_PCT:
+                if not wait.can_extend_bbo_stable:
+                    log.debug(
+                        f"Limit order timeout after {timeout}s "
+                        f"(BBO stable drift {drift:.3%}, "
+                        f"retries exhausted {wait.retry_progress})"
+                    )
+                    return await _cancel_or_market_fallback(
+                        client, order, side, symbol, reduce_only, use_market_fallback, timeout
+                    )
+
                 wait.mark_bbo_stable(drift)
                 if msg := wait.waiting_log(order, side, qty, symbol, force=True):
                     log.debug(msg)
@@ -226,12 +266,9 @@ async def fill_limit_order(
                 continue
 
             log.debug(f"Limit order timeout after {timeout}s (BBO drift {drift:.3%})")
-            await client.cancel_order(order)
-            remaining = order.size - order.filled
-            if use_market_fallback and remaining > 0:
-                log.debug(f"Limit timeout → market fallback {side} {remaining} {symbol}")
-                return await client.market_order(symbol, side, remaining, reduce_only)
-            raise RuntimeError(f"Limit {symbol} timed out after {timeout}s, no fallback")
+            return await _cancel_or_market_fallback(
+                client, order, side, symbol, reduce_only, use_market_fallback, timeout
+            )
 
         if msg := wait.waiting_log(order, side, qty, symbol):
             log.debug(msg)

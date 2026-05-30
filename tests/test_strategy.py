@@ -577,10 +577,10 @@ async def test_tradeable_symbols_keeps_all_symbols_and_checks_window(monkeypatch
 
     assert result == ["BTC", "ETH"]
     assert acc.tradeable_checks == [
-        ("BTC", base + timedelta(seconds=11), False),
-        ("BTC", base + timedelta(seconds=43), True),
-        ("ETH", base + timedelta(seconds=11), False),
-        ("ETH", base + timedelta(seconds=43), True),
+        ("BTC", base + timedelta(seconds=5), False),
+        ("BTC", base + timedelta(seconds=35), True),
+        ("ETH", base + timedelta(seconds=5), False),
+        ("ETH", base + timedelta(seconds=35), True),
     ]
 
 
@@ -615,8 +615,8 @@ async def test_tradeable_symbols_budgets_sequential_limit_baskets(monkeypatch):
     assert all(
         checks
         == [
-            (base + timedelta(seconds=17), False),
-            (base + timedelta(seconds=55), True),
+            (base + timedelta(seconds=125), False),
+            (base + timedelta(seconds=235), True),
         ]
         for checks in checks_by_symbol.values()
     )
@@ -659,7 +659,7 @@ async def test_tradeable_symbols_filters_closed_before_entry(monkeypatch):
 
     monkeypatch.setattr("strategy.cycle.datetime", FrozenDateTime)
     acc = MockClient("a")
-    open_at = base + timedelta(seconds=300 + 90 + 180)  # entry_gate_wait + seq_limit + drift
+    open_at = base + timedelta(seconds=300)
     acc.tradeable_by_time[("ETH", open_at, False)] = False
     strategy = DeltaStrategy(
         make_cfg(symbols=["BTC", "ETH"], symbols_per_trade=1),
@@ -1333,10 +1333,65 @@ async def test_limit_stable_bbo_wait_logs_use_total_elapsed(monkeypatch):
     assert result is not None
     assert result.status == OrderStatus.FILLED
     assert any(
-        "Limit bid 0.002 BTC: waiting elapsed=2s (BBO stable drift=0.000%, extended 1x)" in message
+        "Limit bid 0.002 BTC: waiting elapsed=2s (BBO stable drift=0.000%, retry 1/9)" in message
         for message in logs
     )
     assert any("Limit bid 0.002 BTC filled in 5s" in message for message in logs)
+
+
+async def test_limit_wait_retries_zero_skips_stable_bbo_retry(monkeypatch):
+    a = MockClient("a")
+    clock = FakeClock()
+    monkeypatch.setattr("strategy.execution.time.time", clock.time)
+    monkeypatch.setattr("strategy.execution.asyncio.sleep", clock.sleep)
+    qty = Decimal("0.002")
+    logs: list[str] = []
+    sink_id = logger.add(lambda msg: logs.append(str(msg)), format="{message}", level="DEBUG")
+
+    async def open_limit(s, side, q, price, reduce_only=False):
+        return Order(
+            id="ord-l",
+            symbol=s,
+            side=side,
+            size=q,
+            filled=Decimal(0),
+            price=price,
+            status=OrderStatus.OPEN,
+        )
+
+    async def still_open(oid):
+        return Order(
+            id=oid,
+            symbol="BTC",
+            side="bid",
+            size=qty,
+            filled=Decimal(0),
+            price=Decimal("49999"),
+            status=OrderStatus.OPEN,
+        )
+
+    a.limit_order = open_limit  # type: ignore[method-assign]
+    a.get_order = still_open  # type: ignore[method-assign]
+
+    try:
+        result = await fill_limit_order(
+            a,
+            "BTC",
+            "bid",
+            qty,
+            timeout=1,
+            use_market_fallback=True,
+            max_wait_retries=0,
+        )
+    finally:
+        logger.remove(sink_id)
+
+    assert result is not None
+    assert result.status == OrderStatus.FILLED
+    assert "cancel_order" in a.calls
+    assert "market_order" in a.calls
+    assert any("retries exhausted 0/0" in message for message in logs)
+    assert not any("retry 1/" in message for message in logs)
 
 
 def test_simulate_book_fill_single_level():

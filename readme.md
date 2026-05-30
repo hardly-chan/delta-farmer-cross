@@ -227,10 +227,13 @@ Durations accept seconds (`30`), strings like `"15s"`, `"5m"`, `"1h"`, or a rang
 
 Only relevant when `use_limit = true`.
 
-| Parameter               | Default | Description                                                                                           |
-| ----------------------- | ------- | ----------------------------------------------------------------------------------------------------- |
-| `limit_wait`            | `"90s"` | How long to wait for a limit order to fill.                                                           |
-| `limit_market_fallback` | `true`  | If the limit order times out, fall back to a market order. Set to `false` to abort the cycle instead. |
+| Parameter               | Default | Description                                                                                                                    |
+| ----------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `limit_wait`            | `"90s"` | How long to wait for a limit order to fill.                                                                                    |
+| `limit_wait_retries`    | `9`     | Extra `limit_wait` windows to keep waiting while BBO stays near the original limit price. `0` = disabled.                     |
+| `limit_market_fallback` | `true`  | If the limit order times out, fall back to a market order. Set to `false` to abort the cycle instead.                          |
+
+Maximum wait for one limit order is `limit_wait * (1 + limit_wait_retries)`. Higher retry counts favor maker fills, but require longer tradeability windows before opening and closing positions.
 
 ### Safety limits
 

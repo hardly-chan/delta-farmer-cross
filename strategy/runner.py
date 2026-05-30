@@ -265,5 +265,6 @@ async def run_groups(cfg: StrategyConfig, accs: Sequence[TradingClient]) -> None
         await asyncio.sleep(cfg.regroup_interval)
         stop_event.set()
 
-        max_wait = int(cfg.limit_wait) + int(cfg.trade_duration.max) + 60
+        limit_wait = cfg.limit_wait_budget if cfg.use_limit else 0
+        max_wait = limit_wait * cfg.symbols_per_trade * 2 + int(cfg.trade_duration.max) + 60
         await utils.gather_cancel(tasks, max_wait)
