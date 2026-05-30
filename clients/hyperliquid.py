@@ -11,7 +11,7 @@ from typing import Any, NoReturn, Self
 import msgpack
 from eth_account.messages import encode_typed_data
 from eth_account.signers.local import LocalAccount
-from web3 import Web3
+from eth_utils.crypto import keccak
 
 from lib import utils
 from lib.decorators import bind_log_context, ttl_cache
@@ -129,7 +129,7 @@ class HyperLiquidClient:
         data: bytes = msgpack.packb(action, use_bin_type=True)  # type: ignore[assignment]
         data += struct.pack(">Q", nonce)
         data += b"\x00"
-        connection_id = Web3.keccak(data)
+        connection_id = keccak(data)
         payload = {
             "types": _AGENT_TYPES,
             "domain": _AGENT_DOMAIN,
