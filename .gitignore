@@ -9,5 +9,6 @@ __pycache__/
 .venv/
 *.har
 *.pyc
+*.txt
 configs/
 logs/

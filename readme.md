@@ -1,5 +1,9 @@
 # delta-farmer
 
+<p align="center">
+  English · <a href="readme.ru.md">Русский</a> · <a href="readme.uk.md">Українська</a>
+</p>
+
 <p align="center"><img src=".github/logo.svg" width="200" /></p>
 
 <div align="center">
@@ -133,7 +137,7 @@ You need at least **2 accounts** — one goes long, the other goes short.
 uv run apps/<app>.py config encrypt
 ```
 
-You'll be prompted for a password. After this step, the raw keys are replaced with encrypted values in the file. You'll enter this password each time you start the bot (or set it in `.env` — see [Password Management](#password-management)).
+You'll be prompted for a password. After this step, the raw keys are replaced with encrypted values in the file. You'll enter this password each time you start the bot (or set it in `.env` — see [Private Key Encryption & Passwords](#private-key-encryption--passwords)).
 
 **Step 4 — Start trading**
 
@@ -156,8 +160,10 @@ uv run apps/<app>.py positions      # View current open positions
 uv run apps/<app>.py proxy          # Check configured proxies
 
 # Statistics
-uv run apps/<app>.py stats          # Current period stats (cached 1h)
+uv run apps/<app>.py stats          # All cached periods (cached 1h)
+uv run apps/<app>.py stats this     # Current period only
 uv run apps/<app>.py stats last     # Previous period only
+uv run apps/<app>.py stats W05      # Specific week/period prefix
 uv run apps/<app>.py stats --force  # Force-refresh cached stats
 uv run apps/<app>.py clean          # Delete all cached data
 
@@ -198,15 +204,19 @@ uv run scripts/weekly.py --burn             # Burn pivot by ISO week and exchang
 uv run scripts/weekly.py --help             # Full weekly report help
 ```
 
-### Experimental: Omni competition
-
-Omni has experimental competition helpers. The command checks the active competition window,
-per-account join status, eligibility volume, and leaderboard places.
+### Exchange-specific commands
 
 ```bash
-uv run apps/omni.py competition        # Show competition status
-uv run apps/omni.py competition --join # Opt in all configured accounts
+uv run apps/omni.py competition              # Show Omni competition status
+uv run apps/omni.py competition --join       # Opt in all configured Omni accounts
+uv run apps/hyena.py reward claim            # Claim Hyena rewards
+uv run apps/hyena.py migrate                 # Migrate Hyena HyperLiquid accounts to unified mode
+uv run apps/onyx.py migrate                  # Migrate Onyx HyperLiquid accounts to unified mode
 ```
+
+Omni competition commands check the active tournament window, join status, eligibility volume,
+and leaderboard places. Hyena and Onyx migration commands switch HyperLiquid-backed accounts to
+Unified Account mode when the exchange reports a legacy account mode.
 
 ---
 
@@ -235,7 +245,7 @@ Exactly one of these is required — you cannot use both.
 
 ### Timing
 
-Durations accept seconds (`30`), strings like `"15s"`, `"5m"`, `"1h"`, or a range `{ min = "15m", max = "20m" }`.
+Durations accept seconds (`30`), strings like `"15s"`, `"5m"`, `"1h"`, `"3d"`, compound strings like `"1d2h30m"`, or a range `{ min = "15m", max = "20m" }`.
 
 | Parameter         | Default  | Description                                          |
 | ----------------- | -------- | ---------------------------------------------------- |
@@ -247,13 +257,37 @@ Durations accept seconds (`30`), strings like `"15s"`, `"5m"`, `"1h"`, or a rang
 
 Only relevant when `use_limit = true`.
 
+```toml
+use_limit = true
+limit_wait = "90s"
+limit_wait_retries = 99
+limit_market_fallback = true
+```
+
 | Parameter               | Default | Description                                                                                                                    |
 | ----------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `limit_wait`            | `"90s"` | How long to wait for a limit order to fill.                                                                                    |
-| `limit_wait_retries`    | `9`     | Extra `limit_wait` windows to keep waiting while BBO stays near the original limit price. `0` = disabled.                     |
+| `limit_wait_retries`    | `99`    | Extra `limit_wait` windows to keep waiting while BBO stays near the original limit price. `0` = disabled.                     |
 | `limit_market_fallback` | `true`  | If the limit order times out, fall back to a market order. Set to `false` to abort the cycle instead.                          |
 
 Maximum wait for one limit order is `limit_wait * (1 + limit_wait_retries)`. Higher retry counts favor maker fills, but require longer tradeability windows before opening and closing positions.
+
+### Entry gate settings
+
+Before opening a position, the bot can wait for acceptable entry spread/depth. Set
+`max_entry_spread_pct = null` to disable this gate.
+
+```toml
+max_entry_spread_pct = 0.25
+entry_gate_wait = "5m"
+entry_gate_poll = "3s"
+```
+
+| Parameter              | Default | Description                                                             |
+| ---------------------- | ------- | ----------------------------------------------------------------------- |
+| `max_entry_spread_pct` | `0.25`  | Maximum estimated entry spread/depth percent before opening a position. |
+| `entry_gate_wait`      | `"5m"`  | Maximum time to wait for acceptable entry quality before skipping.      |
+| `entry_gate_poll`      | `"3s"`  | How often to re-check entry quality while waiting. Must be 1–10 seconds. |
 
 ### Safety limits
 
@@ -261,9 +295,6 @@ Maximum wait for one limit order is `limit_wait * (1 + limit_wait_retries)`. Hig
 | -------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `position_roi_limit` | `0.8`   | Emergency-close the full cycle if any single position reaches ±80% ROI.                                                                                     |
 | `combined_roi_limit` | `0.1`   | Emergency-close if the combined basket ROI reaches ±10%.                                                                                                    |
-| `max_entry_spread_pct` | `0.25` | Wait before opening if estimated entry spread/depth is worse than this percent. Set to `null` to disable the entry gate.                                  |
-| `entry_gate_wait` | `"5m"` | Maximum time to wait for acceptable entry spread/depth before skipping the cycle.                                                                                |
-| `entry_gate_poll` | `"3s"` | How often to re-check entry quality while waiting.                                                                                                               |
 | `max_failures`       | `0`     | Stop the strategy after this many consecutive cycle failures. `0` = never stop — retries indefinitely with exponential backoff (up to 1h between attempts). |
 
 ### Grouped trading
@@ -462,6 +493,15 @@ uv run apps/<app>.py trade
 Delta-farmer collects anonymous usage statistics (exchange name, command used, technical config flags) to understand adoption and popular features. No wallet addresses, balances, or strategy parameters are ever sent.
 
 Set `DF_TELEMETRY=0` to opt out completely.
+
+## Environment Variables
+
+| Variable                  | Description                                           |
+| ------------------------- | ----------------------------------------------------- |
+| `DF_CONFIG_PASSWORD`      | Config encryption password for non-interactive runs.  |
+| `DF_LOG_FILE=1`           | Also write trade logs to `logs/<timestamp>-<app>.log`. |
+| `DF_NO_UPDATE_NOTIFIER=1` | Disable release update checks.                        |
+| `DF_TELEMETRY=0`          | Disable anonymous usage telemetry.                    |
 
 ## Risk Disclaimer
 
