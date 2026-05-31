@@ -56,9 +56,40 @@ class HyenaRewards(BaseModel):
     history: list[HyenaHistoryItem] = []
 
 
-class HyenaPayoutsTotal(BaseModel):
+class HyenaRewardTotal(BaseModel):
     totalClaimed: Decimal
     todayAmount: Decimal
+
+
+class HyenaSystemRewardSummary(BaseModel):
+    totalReports: int
+    claimableReports: int
+    claimableAmount: Decimal
+    totalProcessed: Decimal
+    processingCount: int
+    failedCount: int
+
+
+class HyenaSystemRewardReport(BaseModel):
+    id: str
+    amount: Decimal
+    tokenSymbol: str
+    status: str
+    startDate: datetime
+    endDate: datetime
+
+
+class HyenaSystemRewards(BaseModel):
+    summary: HyenaSystemRewardSummary
+    reports: list[HyenaSystemRewardReport]
+    claimableReports: list[HyenaSystemRewardReport]
+
+
+class HyenaSystemRewardClaim(BaseModel):
+    reportId: str
+    status: str
+    amount: Decimal
+    tokenSymbol: str
 
 
 # MARK: Client
@@ -145,6 +176,28 @@ class HyenaClient(HyperLiquidClient):
             raise ApiError(f"Hyena GET {path} failed", rep)
         return rep.json()
 
+    async def _authed_post(self, path: str, **kwargs) -> dict:
+        if not self._jwt:
+            async with self._login_lock:
+                if not self._jwt:  # re-check after acquiring lock
+                    await self._login()
+        jwt = self._jwt
+        rep = await self._app_http.request(
+            "POST", path, headers={"Authorization": f"Bearer {jwt}"}, **kwargs
+        )
+        if rep.status_code == 401:
+            self._jwt = None
+            async with self._login_lock:
+                if not self._jwt:
+                    await self._login()
+            jwt = self._jwt
+            rep = await self._app_http.request(
+                "POST", path, headers={"Authorization": f"Bearer {jwt}"}, **kwargs
+            )
+        if not rep.ok:
+            raise ApiError(f"Hyena POST {path} failed", rep)
+        return rep.json()
+
     def _filter_positions(self, positions: list[Position]) -> list[Position]:
         return [p for p in positions if p.symbol.startswith("hyna:")]
 
@@ -177,9 +230,21 @@ class HyenaClient(HyperLiquidClient):
         )
         return HyenaRewards.model_validate(data["data"])
 
-    async def payouts_total(self) -> HyenaPayoutsTotal:
+    async def reward_total(self) -> HyenaRewardTotal:
         data = await self._authed_get("/api/hyena/payouts/total")
-        return HyenaPayoutsTotal.model_validate(data)
+        return HyenaRewardTotal.model_validate(data)
+
+    async def system_rewards(self) -> HyenaSystemRewards:
+        data = await self._authed_get(
+            "/api/hyena/system-payouts/claim", params={"payoutType": "HYENA_WEEKLY_BOOSTED_YIELD"}
+        )
+        return HyenaSystemRewards.model_validate(data["data"])
+
+    async def claim_system_reward(self, report_id: str) -> HyenaSystemRewardClaim:
+        data = await self._authed_post(
+            "/api/hyena/system-payouts/claim", json={"systemPayoutReportId": report_id}
+        )
+        return HyenaSystemRewardClaim.model_validate(data["data"])
 
     async def fills(self) -> list[HyenaFill]:
         data = await self._info(type="userFills", user=self.address, aggregateByTime=True)
