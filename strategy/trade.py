@@ -78,6 +78,10 @@ async def plan_delta_trades(
 
     lead_side: Side = random.choice(["bid", "ask"])
     total_size = Decimal(sum(size for _, size in pairs))
+    if total_size <= 0:
+        logger.warning("Trade size is zero; skipping cycle")
+        return None
+
     symbol_sizes = calc_symbol_sizes(total_size, symbols, lead_side)
 
     mapping = {acc.name: acc for acc in accounts}

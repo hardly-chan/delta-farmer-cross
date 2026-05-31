@@ -111,6 +111,24 @@ async def test_plan_delta_trades_returns_none_when_pair_not_found(monkeypatch):
     assert trades is None
 
 
+async def test_plan_delta_trades_returns_none_when_pair_total_is_zero(monkeypatch):
+    accounts = [DummyClient("a"), DummyClient("b")]
+    monkeypatch.setattr(
+        "strategy.trade.find_safe_pair",
+        lambda *_: [("a", Decimal("0.00")), ("b", Decimal("0.00"))],
+    )
+
+    trades = await plan_delta_trades(
+        accounts=cast(list[TradingClient], accounts),
+        symbols=["BTC", "ETH"],
+        total_size_usd=Decimal("0"),
+        leverage=10,
+        balances=[("a", 0.0), ("b", 0.0)],
+    )
+
+    assert trades is None
+
+
 def test_calc_total_from_pct_two_accounts():
     bals = [("prime", 1000.0), ("hedge", 500.0)]
     assert calc_total_from_pct(bals, leverage=10, pct=1.0) == 500 * 10 * SAFE_PCT / Decimal("0.5")

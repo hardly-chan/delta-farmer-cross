@@ -299,7 +299,18 @@ class HyperLiquidClient:
 
     # MARK: Account
 
+    async def _spot_balance(self, coin: str = "USDC") -> Decimal:
+        rep = await self._info(type="spotClearinghouseState", user=self.address)
+        for bal in rep.get("balances", []):
+            if bal.get("coin") == coin:
+                return Decimal(str(bal.get("total", 0)))
+        return Decimal(0)
+
     async def balance(self) -> Decimal:
+        mode = await self.account_mode()
+        if mode in ("unifiedAccount", "portfolioMargin"):
+            return await self._spot_balance()
+
         rep = await self._info(type="clearinghouseState", user=self.address)
         return Decimal(str(rep["marginSummary"]["accountValue"]))
 
@@ -565,9 +576,9 @@ def warn_legacy_hyperliquid_accounts(accounts: Sequence[str], app_name: str) -> 
     names = ", ".join(accounts)
     command = f"uv run apps/{app_name.lower()}.py migrate"
     rprint(
-        "[cyan]*[/cyan] Hyperliquid Unified Account is recommended. "
-        f"Migrate these accounts before trading: {names}. "
-        f"Run [cyan]{command}[/cyan] or use {app_name}/Hyperliquid UI."
+        "[cyan]*[/cyan] Hyperliquid Unified Account is recommended; "
+        f"other account modes are best-effort and not guaranteed: {names}. "
+        f"Run [cyan]{command}[/cyan] or migrate in {app_name}/Hyperliquid UI."
     )
 
 

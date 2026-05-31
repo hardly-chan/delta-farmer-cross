@@ -2,11 +2,26 @@
 
 from decimal import Decimal
 
+import pytest
+
 from clients.hyena import HyenaClient
+from clients.hyperliquid import HyperLiquidClient
 from clients.onyx import OnyxClient
 from strategy.models import Position, Side
 
 _FAKE_KEY = "a" * 64
+
+
+class FakeHyperLiquidClient(HyperLiquidClient):
+    def __init__(self, responses: dict[str, object]):
+        super().__init__(name="test", privkey=_FAKE_KEY)
+        self.responses = responses
+        self.calls: list[str] = []
+
+    async def _info(self, **kwargs):
+        request_type = kwargs["type"]
+        self.calls.append(request_type)
+        return self.responses[request_type]
 
 
 def _pos(symbol: str, side: Side = "bid") -> Position:
@@ -18,6 +33,40 @@ def _pos(symbol: str, side: Side = "bid") -> Position:
         entry_price=Decimal("80000"),
         unrealized_pnl=Decimal("0"),
     )
+
+
+# MARK: Balance
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_balance_uses_clearinghouse_state_for_standard_accounts():
+    c = FakeHyperLiquidClient(
+        {
+            "userAbstraction": "disabled",
+            "clearinghouseState": {"marginSummary": {"accountValue": "123.45"}},
+        }
+    )
+
+    assert await c.balance() == Decimal("123.45")
+    assert c.calls == ["userAbstraction", "clearinghouseState"]
+
+
+@pytest.mark.asyncio
+async def test_hyperliquid_balance_uses_spot_state_for_unified_accounts():
+    c = FakeHyperLiquidClient(
+        {
+            "userAbstraction": "unifiedAccount",
+            "spotClearinghouseState": {
+                "balances": [
+                    {"coin": "HYPE", "total": "2"},
+                    {"coin": "USDC", "total": "456.78", "hold": "12.34"},
+                ]
+            },
+        }
+    )
+
+    assert await c.balance() == Decimal("456.78")
+    assert c.calls == ["userAbstraction", "spotClearinghouseState"]
 
 
 # MARK: HyenaClient
