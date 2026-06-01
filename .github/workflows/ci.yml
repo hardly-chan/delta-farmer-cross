@@ -53,6 +53,16 @@ jobs:
             exit 1
           fi
 
-      - run: gh release create "${{ github.ref_name }}" --verify-tag --generate-notes
+      - name: Extract changelog entry
+        run: |
+          VERSION="${{ github.ref_name }}"
+          NOTES=$(awk "/^## ${VERSION}/{found=1; next} /^## /{found=0} found" changelog.md | sed '/^---$/d')
+          if [ -z "$NOTES" ]; then
+            echo "Error: no changelog entry found for ${VERSION}"
+            exit 1
+          fi
+          echo "$NOTES" > release_notes.txt
+
+      - run: gh release create ${{ github.ref_name }} --title ${{ github.ref_name }} --notes-file release_notes.txt
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

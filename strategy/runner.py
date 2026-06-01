@@ -239,6 +239,7 @@ async def run_groups(cfg: StrategyConfig, accs: Sequence[TradingClient]) -> None
             "symbols_count": len(cfg.symbols),
             "symbols_per_trade": cfg.symbols_per_trade,
             "trade_size_mode": "pct" if cfg.trade_size_pct is not None else "usd",
+            "market_hours": cfg.market_hours.value,
             "use_limit": cfg.use_limit,
             "limit_wait_retries": cfg.limit_wait_retries,
             "limit_market_fallback": cfg.limit_market_fallback,

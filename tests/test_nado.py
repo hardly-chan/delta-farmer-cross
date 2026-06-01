@@ -155,10 +155,38 @@ async def test_is_symbol_tradeable_not_tradable_reduce_only_returns_false():
     )
 
 
-async def test_is_symbol_tradeable_reduce_only_status_without_hours_is_true():
+async def test_is_symbol_tradeable_reduce_only_status_blocks_open():
     client = make_stub_client(make_symbol(trading_status="reduce_only"))
 
-    assert await client.is_symbol_tradeable("TEST", datetime(2026, 5, 29, tzinfo=UTC)) is True
+    assert await client.is_symbol_tradeable("TEST", datetime(2026, 5, 29, tzinfo=UTC)) is False
+
+
+async def test_is_symbol_tradeable_reduce_only_status_allows_reduce_only():
+    client = make_stub_client(make_symbol(trading_status="reduce_only"))
+
+    assert (
+        await client.is_symbol_tradeable(
+            "TEST", datetime(2026, 5, 29, tzinfo=UTC), reduce_only=True
+        )
+        is True
+    )
+
+
+async def test_is_symbol_tradeable_soft_reduce_only_status_blocks_open():
+    client = make_stub_client(make_symbol(trading_status="soft_reduce_only"))
+
+    assert await client.is_symbol_tradeable("TEST", datetime(2026, 5, 29, tzinfo=UTC)) is False
+
+
+async def test_is_symbol_tradeable_soft_reduce_only_status_allows_reduce_only():
+    client = make_stub_client(make_symbol(trading_status="soft_reduce_only"))
+
+    assert (
+        await client.is_symbol_tradeable(
+            "TEST", datetime(2026, 5, 29, tzinfo=UTC), reduce_only=True
+        )
+        is True
+    )
 
 
 async def test_is_symbol_tradeable_post_only_status_without_hours_is_true():
@@ -178,7 +206,7 @@ async def test_is_symbol_tradeable_post_only_status_blocks_reduce_only():
     )
 
 
-async def test_is_symbol_tradeable_reduce_only_honors_hours_check():
+async def test_is_symbol_tradeable_reduce_only_ignores_closed_market_hours():
     at = datetime(2026, 5, 29, 12, tzinfo=UTC)
     client = make_stub_client(
         make_symbol(
@@ -189,7 +217,7 @@ async def test_is_symbol_tradeable_reduce_only_honors_hours_check():
         )
     )
 
-    assert await client.is_symbol_tradeable("TEST", at, reduce_only=True) is False
+    assert await client.is_symbol_tradeable("TEST", at, reduce_only=True) is True
 
 
 async def test_is_symbol_tradeable_crypto_without_market_hours_is_true():
@@ -212,6 +240,21 @@ async def test_is_symbol_tradeable_open_market_with_future_close_is_true():
     assert await client.is_symbol_tradeable("TEST", at) is True
 
 
+async def test_is_symbol_tradeable_open_market_ignores_future_next_open():
+    at = datetime(2026, 6, 2, 5, tzinfo=UTC)
+    client = make_stub_client(
+        make_symbol(
+            market_hours=MarketHours(
+                is_open=True,
+                next_close=datetime(2026, 6, 6, tzinfo=UTC),
+                next_open=datetime(2026, 6, 8, 8, tzinfo=UTC),
+            )
+        )
+    )
+
+    assert await client.is_symbol_tradeable("TEST", at) is True
+
+
 async def test_is_symbol_tradeable_open_market_at_exact_close_is_false():
     at = datetime(2026, 5, 29, 12, tzinfo=UTC)
     client = make_stub_client(
@@ -226,7 +269,7 @@ async def test_is_symbol_tradeable_open_market_at_exact_close_is_false():
     assert await client.is_symbol_tradeable("TEST", at) is False
 
 
-async def test_is_symbol_tradeable_reduce_only_open_market_at_exact_close_is_false():
+async def test_is_symbol_tradeable_reduce_only_open_market_at_exact_close_is_true():
     at = datetime(2026, 5, 29, 12, tzinfo=UTC)
     client = make_stub_client(
         make_symbol(
@@ -237,7 +280,23 @@ async def test_is_symbol_tradeable_reduce_only_open_market_at_exact_close_is_fal
         )
     )
 
-    assert await client.is_symbol_tradeable("TEST", at, reduce_only=True) is False
+    assert await client.is_symbol_tradeable("TEST", at, reduce_only=True) is True
+
+
+async def test_is_symbol_tradeable_future_closed_window_blocks_open_but_allows_reduce_only():
+    at = datetime(2026, 6, 6, 12, tzinfo=UTC)
+    client = make_stub_client(
+        make_symbol(
+            market_hours=MarketHours(
+                is_open=True,
+                next_close=datetime(2026, 6, 6, tzinfo=UTC),
+                next_open=datetime(2026, 6, 8, 8, tzinfo=UTC),
+            )
+        )
+    )
+
+    assert await client.is_symbol_tradeable("TEST", at) is False
+    assert await client.is_symbol_tradeable("TEST", at, reduce_only=True) is True
 
 
 async def test_is_symbol_tradeable_open_market_with_past_close_is_false():

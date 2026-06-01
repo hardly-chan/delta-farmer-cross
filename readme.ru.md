@@ -228,6 +228,7 @@ uv run apps/onyx.py migrate                  # Перевести Onyx HyperLiqu
 | `leverage`          | `10`     | Множитель leverage (1-49). Ставьте **минимальный** max leverage среди выбранных symbols.                                                                        |
 | `symbols`           | required | Торговые пары, например `["BTC"]` или `["BTC", "ETH"]`. Доступные symbols проверяйте в UI exchange.                                                            |
 | `symbols_per_trade` | `1`      | Сколько symbols торговать за цикл. `1` = classic mode и может выбирать один symbol из списка; `2`-`4` = basket mode и должно совпадать с длиной `symbols`.      |
+| `market_hours`      | `"auto"` | Режим market-hours pre-check: `"auto"` проверяет только planned open, `"strict"` проверяет planned open и close, `"off"` отключает проверку.                  |
 | `use_limit`         | `false`  | Если `true`, prime account открывается limit order вместо market order — это снижает fees.                                                                     |
 | `first_as_prime`    | `false`  | Если `true`, первый аккаунт в списке всегда prime (limit-side). Если `false`, prime выбирается случайно каждый цикл. Игнорируется, если задан `group_size`.     |
 
@@ -372,7 +373,7 @@ regroup_interval = "12h"
 
 ## Проверки безопасности
 
-Перед открытием цикла бот фильтрует настроенные symbols до markets, которые доступны для planned entry и close window на каждом выбранном аккаунте. Stock и commodity markets на Nado используют exchange market-hours и trading-status data; если доступно меньше symbols, чем `symbols_per_trade`, цикл пишет warning и ждет следующий cooldown вместо открытия позиций. Symbols без market-hours metadata считаются 24/7.
+Перед открытием цикла бот может фильтровать настроенные symbols по exchange market-hours data. С дефолтным `market_hours = "auto"` проверяется только planned entry window; planned close может попасть вне regular hours. Используйте `market_hours = "strict"`, чтобы требовать planned entry и planned close внутри regular trading hours, или `market_hours = "off"`, чтобы отключить эту предварительную проверку. Symbols без market-hours metadata считаются 24/7.
 
 Каждые `trade_heartbeat` (по умолчанию 15 секунд) бот проверяет:
 

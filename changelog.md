@@ -1,3 +1,17 @@
+## v0.7.1 – 2026-06-01
+
+### Features
+
+- Added configurable Nado market-hours checks for planned trades.
+
+### Fixes
+
+- Fixed Nado market-hours handling for open and reduce-only markets.
+
+**Full Changelog**: https://github.com/vladkens/delta-farmer/compare/v0.7.0...v0.7.1
+
+---
+
 ## v0.7.0 – 2026-05-31
 
 ### Features

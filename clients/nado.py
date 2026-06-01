@@ -323,13 +323,20 @@ class NadoClient:
             return False
         if reduce_only and sym.trading_status == "post_only":
             return False
+        if reduce_only:
+            return sym.trading_status in ("live", "reduce_only", "soft_reduce_only")
+        if sym.trading_status in ("reduce_only", "soft_reduce_only"):
+            return False
         if sym.market_hours is None:
             return True
 
         nc = sym.market_hours.next_close
         no = sym.market_hours.next_open
-
-        return (no is None or at >= no) and (nc is None or at < nc)
+        if sym.market_hours.is_open:
+            ok = nc is None or at < nc
+        else:
+            ok = (no is None or at >= no) and (nc is None or at < nc)
+        return ok
 
     async def get_lot_size(self, symbol: str) -> Decimal:
         sym = await self.symbol_info(symbol=symbol)

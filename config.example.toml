@@ -4,6 +4,7 @@ symbols = ["BTC", "ETH"]  # Available symbols: check on the exchange
 # symbols_per_trade = 2   # Trade multiple symbols in parallel (see README)
 
 use_limit = true
+# market_hours = "auto"  # auto=open window, strict=open+close windows, off=disabled
 # limit_wait_retries = 99  # Extra limit_wait windows on stable BBO; 0 = disabled
 first_as_prime = true  # true = first account is always prime; false = random each cycle
 

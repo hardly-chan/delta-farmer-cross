@@ -559,7 +559,7 @@ async def test_monitor_trades_exits_on_combined_roi(monkeypatch):
     assert result is False
 
 
-async def test_tradeable_symbols_keeps_all_symbols_and_checks_window(monkeypatch):
+async def test_tradeable_symbols_auto_keeps_all_symbols_and_checks_open_window(monkeypatch):
     base = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
     class FrozenDateTime(datetime):
@@ -579,13 +579,11 @@ async def test_tradeable_symbols_keeps_all_symbols_and_checks_window(monkeypatch
     assert result == ["BTC", "ETH"]
     assert acc.tradeable_checks == [
         ("BTC", base + timedelta(seconds=5), False),
-        ("BTC", base + timedelta(seconds=35), True),
         ("ETH", base + timedelta(seconds=5), False),
-        ("ETH", base + timedelta(seconds=35), True),
     ]
 
 
-async def test_tradeable_symbols_budgets_sequential_limit_baskets(monkeypatch):
+async def test_tradeable_symbols_auto_budgets_sequential_limit_baskets(monkeypatch):
     base = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
     class FrozenDateTime(datetime):
@@ -617,7 +615,6 @@ async def test_tradeable_symbols_budgets_sequential_limit_baskets(monkeypatch):
         checks
         == [
             (base + timedelta(seconds=1205), False),
-            (base + timedelta(seconds=2035), True),
         ]
         for checks in checks_by_symbol.values()
     )
@@ -636,7 +633,7 @@ async def test_tradeable_symbols_filters_unavailable():
     assert result == ["BTC", "SOL"]
 
 
-async def test_tradeable_symbols_filters_unavailable_close_window():
+async def test_tradeable_symbols_auto_ignores_unavailable_close_window():
     acc = MockClient("a")
     acc.tradeable_by_check[("ETH", True)] = False
     strategy = DeltaStrategy(
@@ -646,8 +643,33 @@ async def test_tradeable_symbols_filters_unavailable_close_window():
 
     result = await strategy._tradeable_symbols(30)
 
+    assert result == ["BTC", "ETH"]
+    assert not any(reduce_only for _symbol, _at, reduce_only in acc.tradeable_checks)
+
+
+async def test_tradeable_symbols_strict_filters_unavailable_close_window(monkeypatch):
+    base = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return base if tz is UTC else base.astimezone(tz)
+
+    monkeypatch.setattr("strategy.cycle.datetime", FrozenDateTime)
+    acc = MockClient("a")
+    close_at = base + timedelta(seconds=330)
+    acc.tradeable_by_time[("ETH", close_at, False)] = False
+    strategy = DeltaStrategy(
+        make_cfg(symbols=["BTC", "ETH"], symbols_per_trade=1, market_hours="strict"),
+        [acc],
+    )
+
+    result = await strategy._tradeable_symbols(30)
+
     assert result == ["BTC"]
-    assert any(symbol == "ETH" and reduce_only for symbol, _at, reduce_only in acc.tradeable_checks)
+    assert any(
+        symbol == "ETH" and at == close_at for symbol, at, _reduce_only in acc.tradeable_checks
+    )
 
 
 async def test_tradeable_symbols_filters_closed_before_entry(monkeypatch):
@@ -670,6 +692,24 @@ async def test_tradeable_symbols_filters_closed_before_entry(monkeypatch):
     result = await strategy._tradeable_symbols(30)
 
     assert result == ["BTC"]
+
+
+async def test_tradeable_symbols_can_skip_market_hours_check():
+    acc = MockClient("a")
+    acc.tradeable_symbols["ETH"] = False
+    strategy = DeltaStrategy(
+        make_cfg(
+            symbols=["BTC", "ETH", "BTC"],
+            symbols_per_trade=1,
+            market_hours="off",
+        ),
+        [acc],
+    )
+
+    result = await strategy._tradeable_symbols(30)
+
+    assert result == ["BTC", "ETH"]
+    assert acc.tradeable_checks == []
 
 
 async def test_cycle_samples_from_all_tradeable_symbols(monkeypatch):

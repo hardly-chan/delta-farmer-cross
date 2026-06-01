@@ -15,7 +15,7 @@ from lib.logger import logger
 from lib.utils import round_to_tick_size
 
 from .execution import close_all
-from .models import StrategyConfig, TradingClient, trading_client_trace
+from .models import MarketHoursMode, StrategyConfig, TradingClient, trading_client_trace
 from .symbols import filter_exchange_symbols
 from .trade import DeltaTrade, DeltaTradeSummary, plan_delta_trades
 
@@ -251,6 +251,9 @@ class DeltaStrategy:
         return True
 
     async def _tradeable_symbols(self, duration: int) -> list[str]:
+        if self.cfg.market_hours == MarketHoursMode.OFF:
+            return list(dict.fromkeys(self.cfg.symbols))
+
         now = datetime.now(UTC)
         limit_wait = self.cfg.limit_wait_budget if self.cfg.use_limit else 0
         drift = limit_wait * 2
@@ -259,9 +262,12 @@ class DeltaStrategy:
         close_at = open_at + timedelta(seconds=int(duration) + seq_limit)
 
         async def check(client: TradingClient, symbol: str) -> bool:
-            ok1 = await client.is_symbol_tradeable(symbol, open_at)
-            ok2 = await client.is_symbol_tradeable(symbol, close_at, reduce_only=True)
-            return ok1 and ok2
+            ok_open = await client.is_symbol_tradeable(symbol, open_at)
+            if self.cfg.market_hours == MarketHoursMode.AUTO:
+                return ok_open
+
+            ok_close = await client.is_symbol_tradeable(symbol, close_at)
+            return ok_open and ok_close
 
         return await filter_exchange_symbols(self.accounts, self.cfg.symbols, check)
 

@@ -231,6 +231,7 @@ All settings live in your `configs/<app>.toml` file. Here is every available par
 | `leverage`          | `10`     | Leverage multiplier (1–49). Set it to the **lowest** max leverage across all your chosen symbols.                                                        |
 | `symbols`           | required | Trading pairs, e.g. `["BTC"]` or `["BTC", "ETH"]`. Check the exchange UI for available symbols.                                                          |
 | `symbols_per_trade` | `1`      | How many symbols to trade per cycle. `1` = classic mode and may sample one symbol from the list; `2`–`4` = basket mode and must match the length of `symbols`. |
+| `market_hours`      | `"auto"` | Market-hours pre-check mode: `"auto"` checks planned open only, `"strict"` checks planned open and close, `"off"` disables the pre-check.                 |
 | `use_limit`         | `false`  | If `true`, the prime account opens with a limit order instead of a market order — reduces fees.                                                          |
 | `first_as_prime`    | `false`  | If `true`, the first account in the list is always the prime (limit-side). If `false`, it rotates randomly each cycle. Ignored when `group_size` is set. |
 
@@ -378,7 +379,7 @@ Rules:
 
 ## Safety Checks
 
-Before opening a cycle, the bot filters configured symbols to markets that are tradeable for the planned entry and close window on every selected account. Nado stock and commodity markets use exchange market-hours and trading-status data; if fewer than `symbols_per_trade` symbols are available, the cycle logs a warning and waits for the next cooldown instead of opening trades. Symbols without market-hours metadata are treated as 24/7.
+Before opening a cycle, the bot can filter configured symbols by exchange market-hours data. With the default `market_hours = "auto"`, only the planned entry window is checked; planned close may land outside regular hours. Use `market_hours = "strict"` to require both planned entry and planned close to be inside regular trading hours, or `market_hours = "off"` to disable this pre-check. Symbols without market-hours metadata are treated as 24/7.
 
 Every `trade_heartbeat` interval (default 15 seconds), the bot checks:
 

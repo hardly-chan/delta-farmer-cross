@@ -191,6 +191,12 @@ def trading_client_trace(exc: BaseException) -> str | None:
 # MARK: Strategy config
 
 
+class MarketHoursMode(StrEnum):
+    AUTO = "auto"
+    STRICT = "strict"
+    OFF = "off"
+
+
 class StrategyConfig(BaseModel):
     """Base config for trading strategies."""
 
@@ -206,6 +212,7 @@ class StrategyConfig(BaseModel):
     position_roi_limit: float = Field(0.8, gt=0, lt=1)
     combined_roi_limit: float = Field(0.1, gt=0, lt=1)
     max_failures: int = Field(0, ge=0)  # 0 = infinite retries
+    market_hours: MarketHoursMode = MarketHoursMode.AUTO
     use_limit: bool = False
     limit_wait: DurationSec = DurationSec("90s")
     limit_wait_retries: int = Field(99, ge=0)
