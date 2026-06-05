@@ -9,9 +9,28 @@ import asyncio
 import glob
 from decimal import Decimal
 
-from strategy import OrderBook, OrderBookLevel, StrategyConfig, TradingClient
+from apps.hyperliquid import HyperLiquidNativeClient
+from clients.ethereal import EtherealClient
+from clients.hyena import HyenaClient
+from clients.nado import NadoClient
+from clients.omni import OmniClient
+from clients.onyx import OnyxClient
+from clients.pacifica import PacificaClient
+from clients.rise import RiseClient
+from clients.zero1 import ZeroOneClient
+from strategy import OrderBook, OrderBookLevel, StrategyConfig
 
-EXCHANGES = ["ethereal", "hyena", "hyperliquid", "nado", "omni", "onyx", "pacifica", "zero1"]
+EXCHANGES = [
+    "ethereal",
+    "hyena",
+    "hyperliquid",
+    "nado",
+    "omni",
+    "onyx",
+    "pacifica",
+    "rise",
+    "zero1",
+]
 
 
 def _format_num(value: Decimal, step: Decimal) -> str:
@@ -39,33 +58,7 @@ def _format_spread(bid: Decimal, ask: Decimal) -> str:
     return f"{spread:.3f}%"
 
 
-async def _close_client(client: TradingClient) -> None:
-    seen: set[int] = set()
-    for name in dir(client):
-        if not name.endswith("http") and not name.endswith("_http"):
-            continue
-        obj = getattr(client, name, None)
-        if obj is None or id(obj) in seen:
-            continue
-        close = getattr(obj, "close", None)
-        if close is None:
-            continue
-        seen.add(id(obj))
-        try:
-            await close()
-        except Exception:
-            pass
-
-
 async def snapshot(exchange: str, config_path: str, levels: int) -> tuple[str, str]:
-    from apps.hyperliquid import HyperLiquidNativeClient
-    from clients.ethereal import EtherealClient
-    from clients.hyena import HyenaClient
-    from clients.nado import NadoClient
-    from clients.omni import OmniClient
-    from clients.onyx import OnyxClient
-    from clients.pacifica import PacificaClient
-    from clients.zero1 import ZeroOneClient
 
     client_map = {
         "ethereal": EtherealClient,
@@ -75,6 +68,7 @@ async def snapshot(exchange: str, config_path: str, levels: int) -> tuple[str, s
         "omni": OmniClient,
         "onyx": OnyxClient,
         "pacifica": PacificaClient,
+        "rise": RiseClient,
         "zero1": ZeroOneClient,
     }
 
@@ -123,8 +117,6 @@ async def snapshot(exchange: str, config_path: str, levels: int) -> tuple[str, s
                 f"error  : {type(e).__name__}: {e}",
             ]
         )
-    finally:
-        await _close_client(client)
 
 
 def _pick_config(exchange: str) -> str | None:

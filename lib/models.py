@@ -1,9 +1,12 @@
 # delta-farmer | https://github.com/vladkens/delta-farmer
 # Copyright (c) vladkens | MIT License | Powered by caffeine and stackoverflow
 import random
+from decimal import Decimal
+from typing import Annotated
 
 from pydantic import (
     BaseModel,
+    BeforeValidator,
     Field,
     GetCoreSchemaHandler,
     SecretStr,
@@ -14,6 +17,13 @@ from pydantic_core import core_schema
 
 from .crypto import decrypt_value, is_encrypted
 from .utils import parse_duration
+
+
+def _empty_to_none(value: object) -> object:
+    return None if value == "" else value
+
+
+OptionalDec = Annotated[Decimal | None, BeforeValidator(_empty_to_none)]
 
 
 class DurationSec(int):

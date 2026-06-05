@@ -4,5 +4,6 @@ from .ethereal import EtherealClient
 from .nado import NadoClient
 from .omni import OmniClient
 from .pacifica import PacificaClient
+from .rise import RiseClient
 
-__all__ = ["EtherealClient", "NadoClient", "OmniClient", "PacificaClient"]
+__all__ = ["EtherealClient", "NadoClient", "OmniClient", "PacificaClient", "RiseClient"]

@@ -1,7 +1,7 @@
 # delta-farmer | https://github.com/vladkens/delta-farmer
 # Smoke test – quick sanity check that the exchange API is still alive.
-# Tests one account (first in config) with a symbol that must NOT be in config symbols.
-# Usage: uv run scripts/smoke.py omni|pacifica SYMBOL SIZE_USD [-c xxx.toml]
+# Tests one account (first enabled by default) with a symbol that must NOT be in config symbols.
+# Usage: uv run scripts/smoke.py EXCHANGE SYMBOL SIZE_USD [-c xxx.toml] [-a account]
 import argparse
 import asyncio
 import glob
@@ -48,7 +48,6 @@ async def smoke(client: TradingClient, symbol: str, size_usd: float) -> tuple[in
     except Exception as e:
         report("balance", False, str(e))
 
-    price = lot = tick = None
     try:
         price, lot, tick = await asyncio.gather(
             client.get_price(symbol),
@@ -58,14 +57,30 @@ async def smoke(client: TradingClient, symbol: str, size_usd: float) -> tuple[in
         report("market info", True, f"{symbol} ${price:,.2f}  lot={lot}  tick={tick}")
     except Exception as e:
         report("market info", False, str(e))
-
-    assert lot is not None, "lot size is not set"
-    assert tick is not None, "tick size is not set"
-    assert price is not None, "price is not set"
-
-    if price is None:
         print(f"  {SKIP} skipping order tests (no market data)")
         return passed, failed
+
+    try:
+        book = await client.get_order_book(symbol)
+        best_bid = book.bids[0] if book.bids else None
+        best_ask = book.asks[0] if book.asks else None
+        ok = (
+            best_bid is not None
+            and best_ask is not None
+            and best_bid.price > 0
+            and best_ask.price > 0
+            and best_bid.size > 0
+            and best_ask.size > 0
+            and best_bid.price <= best_ask.price
+        )
+        note = (
+            f"bid={best_bid.price} x {best_bid.size}  ask={best_ask.price} x {best_ask.size}"
+            if best_bid and best_ask
+            else f"bids={len(book.bids)} asks={len(book.asks)}"
+        )
+        report("orderbook", ok, note)
+    except Exception as e:
+        report("orderbook", False, str(e))
 
     try:
         min_usd = await client.get_min_trade_usd(symbol)
@@ -216,12 +231,25 @@ async def smoke(client: TradingClient, symbol: str, size_usd: float) -> tuple[in
 
 async def main():
     parser = argparse.ArgumentParser(prog="smoke", description="Smoke test for exchange clients")
-    exchanges = ["ethereal", "hyena", "hyperliquid", "nado", "omni", "onyx", "pacifica", "zero1"]
+    exchanges = [
+        "ethereal",
+        "hyena",
+        "hyperliquid",
+        "nado",
+        "omni",
+        "onyx",
+        "pacifica",
+        "rise",
+        "zero1",
+    ]
     parser.add_argument("exchange", choices=exchanges)
     parser.add_argument("symbol", help="Symbol to test (must NOT be in config symbols)")
     parser.add_argument("size", type=float, help="Trade size in USD")
     parser.add_argument(
         "-c", "--config", default=None, help="Path to config file (auto-detected if omitted)"
+    )
+    parser.add_argument(
+        "-a", "--account", default=None, help="Account name from config (defaults to first account)"
     )
     args = parser.parse_args()
 
@@ -241,6 +269,7 @@ async def main():
     from clients.omni import OmniClient
     from clients.onyx import OnyxClient
     from clients.pacifica import PacificaClient
+    from clients.rise import RiseClient
     from clients.zero1 import ZeroOneClient
     from strategy import StrategyConfig
 
@@ -252,13 +281,20 @@ async def main():
         "omni": OmniClient,
         "onyx": OnyxClient,
         "pacifica": PacificaClient,
+        "rise": RiseClient,
         "zero1": ZeroOneClient,
     }
     if args.exchange not in CLIENT_MAP:
         parser.error(f"unsupported exchange '{args.exchange}'")
 
     cfg = StrategyConfig.load(args.config)
-    acc_cfg = cfg.accounts[0]
+    if args.account is None:
+        acc_cfg = next((acc for acc in cfg.accounts if acc.enabled), cfg.accounts[0])
+    else:
+        acc_cfg = next((acc for acc in cfg.accounts if acc.name == args.account), None)
+        if acc_cfg is None:
+            names = ", ".join(acc.name for acc in cfg.accounts)
+            parser.error(f"account '{args.account}' not found in {args.config}; available: {names}")
     client = CLIENT_MAP[args.exchange].from_config(acc_cfg)  # type: ignore
 
     if args.symbol in cfg.symbols:
@@ -281,7 +317,6 @@ async def main():
     status = "all good" if not failed else f"{failed} FAILED"
     print(f"  {passed}/{total} passed  {status}")
 
-    await client.http.close()
     sys.exit(0 if failed == 0 else 1)
 
 
