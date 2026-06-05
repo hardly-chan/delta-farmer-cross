@@ -1,4 +1,4 @@
-.PHONY: prepare lint test update clean deploy logs foreach info proxy stats-was stats-now
+.PHONY: prepare lint test update update-dev clean deploy logs foreach info proxy stats-was stats-now
 
 FOREACH_CLT := $(filter-out hyperliquid vault,$(basename $(notdir $(wildcard apps/*.py))))
 FOREACH_CMD := $(strip $(cmd) $(if $(filter all,$(p)),,$(p)))
@@ -17,8 +17,13 @@ test:
 
 update:
 	uv lock --upgrade
-	uv audit --frozen
+	uv audit --locked
 	uv sync --locked --all-groups
+
+update-dev:
+	uv lock --upgrade-group test --upgrade-group lint
+	uv audit --locked
+	uv sync --locked --group test --group lint
 
 clean:
 	rm -rf .ruff_cache .venv uv.lock .python-version .pytest_cache

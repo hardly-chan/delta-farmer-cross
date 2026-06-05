@@ -52,6 +52,7 @@ You control the size, timing, leverage, and which exchange to run on. The bot ha
 | Omni     | EVM     | [variational.io](https://omni.variational.io) | [Sign up](https://omni.variational.io)                             |
 | Onyx     | EVM     | [onyx.live](https://app.onyx.live/)           | [Sign up](https://app.onyx.live/?ref=BB7M4BW3)                     |
 | Pacifica | Solana  | [pacifica.fi](https://app.pacifica.fi)        | [Sign up](https://app.pacifica.fi?referral=uid127)                 |
+| RiseX    | EVM     | [rise.trade](https://www.rise.trade/)         | [Sign up](https://www.rise.trade/)                                 |
 | 01.xyz   | EVM     | [01.xyz](https://01.xyz/)                     | [Sign up](https://01.xyz/ref/019d07db-c7ef-757e-80a4-8a40213488d2) |
 
 ---
@@ -105,7 +106,7 @@ That's it. Dependencies are installed automatically on the first run.
 
 ## Quick Start
 
-Replace `<app>` with your exchange name throughout: `pacifica`, `omni`, `ethereal`, `nado`, `hyena`, `onyx`, or `zero1`.
+Replace `<app>` with your exchange name throughout: `pacifica`, `omni`, `ethereal`, `nado`, `hyena`, `onyx`, `rise`, or `zero1`.
 
 **Step 1 — Create a config file**
 

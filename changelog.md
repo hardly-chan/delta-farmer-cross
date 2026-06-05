@@ -1,3 +1,17 @@
+## v0.8.0 – 2026-06-06
+
+### Features
+
+- Added RiseX exchange support with account info, positions, statistics, closing, and trading.
+
+### Improvements
+
+- Improved limit order execution by repricing drifted orders before using market fallback.
+
+**Full Changelog**: https://github.com/vladkens/delta-farmer/compare/v0.7.1...v0.8.0
+
+---
+
 ## v0.7.1 – 2026-06-01
 
 ### Features
