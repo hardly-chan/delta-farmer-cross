@@ -223,24 +223,6 @@ class RisePosition(BaseModel):
     unrealized_pnl: OptionalDec = None
 
 
-class RiseOpenOrder(BaseModel):
-    model_config = ConfigDict(validate_by_name=True, validate_by_alias=True)
-
-    order_id: str = Field(validation_alias=AliasChoices("order_id", "id"))
-    resting_order_id: str | None = None
-    sc_order_id: str | None = None
-    market_id: int
-    side: int | str
-    price: Decimal | None = None
-    size: Decimal | None = None
-    filled_size: Decimal | None = None
-    price_ticks: int | None = None
-    size_steps: int | None = None
-    filled_size_steps: int | None = None
-    status: str = "ORDER_STATUS_OPEN"
-    reduce_only: bool = False
-
-
 class RiseHistoryOrder(BaseModel):
     model_config = ConfigDict(validate_by_name=True, validate_by_alias=True)
 
@@ -632,39 +614,6 @@ class RiseClient:
             await self.close_position(p)
         return len(positions)
 
-    async def _order_from_open(self, raw: dict[str, Any]) -> Order:
-        order = RiseOpenOrder.model_validate(raw)
-        market = await self.market_info(str(order.market_id))
-        size = (
-            order.size
-            if order.size is not None
-            else Decimal(order.size_steps or 0) * market.config.step_size
-        )
-        filled = (
-            order.filled_size
-            if order.filled_size is not None
-            else Decimal(order.filled_size_steps or 0) * market.config.step_size
-        )
-        price = (
-            order.price
-            if order.price is not None
-            else Decimal(order.price_ticks or 0) * market.config.step_price
-        )
-        resting_id = order.resting_order_id
-        if resting_id:
-            self._order_resting_ids[order.order_id] = resting_id
-        self._order_markets[order.order_id] = order.market_id
-        return Order(
-            id=order.order_id,
-            symbol=market.short_symbol,
-            side=_to_domain_side(order.side),
-            size=size,
-            filled=filled,
-            price=price,
-            status=_to_domain_status(order.status),
-            reduce_only=order.reduce_only,
-        )
-
     async def _order_from_history(self, raw: dict[str, Any]) -> Order:
         order = RiseHistoryOrder.model_validate(raw)
         market = await self.market_info(str(order.market_id))
@@ -703,17 +652,8 @@ class RiseClient:
         return await self._call("GET", f"/api/v1/orders?{urlencode(query)}")
 
     async def _open_orders(self, market_id: int | None = None) -> list[Order]:
-        params: dict[str, Any] = {"account": self.address}
-        if market_id is not None:
-            params["market_id"] = market_id
-        try:
-            data = await self._call("GET", "/api/v1/orders/open", params=params)
-        except ApiError:
-            data = await self._orders_page(
-                ["ORDER_STATUS_OPEN", "ORDER_STATUS_PENDING", "ORDER_STATUS_ACCEPTED"],
-                market_id=market_id,
-            )
-        return [await self._order_from_open(x) for x in data.get("orders", [])]
+        data = await self._orders_page(["ORDER_STATUS_OPEN"], market_id=market_id)
+        return [await self._order_from_history(x) for x in data.get("orders", [])]
 
     async def order_history(
         self,
