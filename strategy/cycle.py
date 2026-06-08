@@ -284,9 +284,13 @@ class DeltaStrategy:
         return Balances({acc.name: float(v) for acc, v in zip(accs, vals)})
 
     def get_trade_size(self, bals: Balances) -> Decimal:
-        if self.cfg.trade_size_pct is not None:
-            return calc_total_from_pct(bals.items(), self.cfg.leverage, self.cfg.trade_size_pct)
-        return Decimal(str(self.cfg.trade_size_usd.sample()))  # type: ignore[union-attr]
+        usd, pct = self.cfg.trade_size_usd, self.cfg.trade_size_pct
+        if (usd is None) == (pct is None):
+            raise RuntimeError("configure exactly one of trade_size_usd or trade_size_pct")
+        if pct is not None:
+            return calc_total_from_pct(bals.items(), self.cfg.leverage, pct)
+        assert usd is not None
+        return Decimal(str(usd.sample()))
 
     def get_ordered_accounts(self) -> list[TradingClient]:
         return (

@@ -88,22 +88,22 @@ def bind_log_context[T: HasName](cls: type[T]) -> type[T]:
         if inspect.iscoroutinefunction(attr):
 
             @wraps(attr)
-            async def async_wrapper(self, *args, __attr=attr, **kwargs):
+            async def async_wrapper(self, *args, _attr=attr, **kwargs):
                 val = getattr(self, "name", None)
                 val = str(self) if not isinstance(val, str) else val
                 with logger.contextualize(account=val):
-                    return await __attr(self, *args, **kwargs)
+                    return await _attr(self, *args, **kwargs)
 
             setattr(cls, attr_name, async_wrapper)
 
         else:
 
             @wraps(attr)
-            def sync_wrapper(self, *args, __attr=attr, **kwargs):
+            def sync_wrapper(self, *args, _attr=attr, **kwargs):
                 val = getattr(self, "name", None)
                 val = str(self) if not isinstance(val, str) else val
                 with logger.contextualize(account=val):
-                    return __attr(self, *args, **kwargs)
+                    return _attr(self, *args, **kwargs)
 
             setattr(cls, attr_name, sync_wrapper)
 

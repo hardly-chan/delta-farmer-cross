@@ -178,7 +178,7 @@ def trading_client_trace(exc: BaseException) -> str | None:
         frame = tb.tb_frame
         obj = frame.f_locals.get("self")
         if isinstance(obj, TradingClient):
-            attr = frame.f_locals.get("__attr")  # decorators keep the original method here
+            attr = frame.f_locals.get("_attr")  # decorators keep the original method here
             fn = getattr(attr, "__name__", frame.f_code.co_name)
             label = f"{type(obj).__name__}.{fn}({obj.name})"
             if not path or path[-1] != label:

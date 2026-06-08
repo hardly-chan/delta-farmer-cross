@@ -40,10 +40,8 @@
   - existing strategy lifecycle tests remain green.
   - existing tradeable-symbol timing tests remain green.
 - **commands**:
-  - `uv run pytest tests/test_strategy.py`
-  - `uv run pytest`
-  - `uv run ruff check`
-  - `uv run pyright`
+  - `make test`
+  - `make lint`
 
 ## Progress Tracking
 - mark completed items with `[x]` immediately when done
@@ -115,7 +113,7 @@ Invalid configured symbols: ET is not available on pacifica
 - [ ] update `_check_symbols` to use `AccountGroup(accs).ensure_exchange_symbols(...)`
 - [ ] update `_tradeable_symbols` to use `AccountGroup(self.accounts).filter_exchange_symbols(...)`
 - [ ] update tests for the new class API and preserve current invalid-symbol behavior
-- [ ] run `uv run pytest tests/test_strategy.py`
+- [ ] run `make test`
 
 ### Task 2: Fix position reporting price source
 
@@ -127,7 +125,7 @@ Invalid configured symbols: ET is not available on pacifica
 - [ ] key mark prices by `(account_name, symbol)` instead of only `symbol`
 - [ ] fall back to entry price only for the specific account/symbol whose price lookup failed
 - [ ] add a mixed-exchange test where the first account cannot price the second account's symbol
-- [ ] run `uv run pytest tests/test_strategy.py`
+- [ ] run `make test`
 
 ### Task 3: Check entry gate per relevant client
 
@@ -140,7 +138,7 @@ Invalid configured symbols: ET is not available on pacifica
 - [ ] return `True` only when every client group passes
 - [ ] add a test that gate checks both lead and rest clients
 - [ ] add a test that one failing client group blocks the whole trade
-- [ ] run `uv run pytest tests/test_strategy.py`
+- [ ] run `make test`
 
 ### Task 4: Document deferred mixed-exchange sizing
 
@@ -151,7 +149,7 @@ Invalid configured symbols: ET is not available on pacifica
 - [ ] add a concise TODO near `DeltaTrade.load_qtys` explaining that it still uses lead price/lot size
 - [ ] note that the future fix must compute qty per leg and revisit delta adjustment across different lot sizes
 - [ ] avoid changing sizing behavior in this plan
-- [ ] run `uv run pytest tests/test_strategy.py`
+- [ ] run `make test`
 
 ### Task 5: Verify acceptance criteria
 
@@ -159,9 +157,8 @@ Invalid configured symbols: ET is not available on pacifica
 - [ ] verify tradeable symbol filtering still handles market-hours checks
 - [ ] verify `positions` reporting no longer depends on the first account for all prices
 - [ ] verify gate checks every relevant client group
-- [ ] run `uv run pytest`
-- [ ] run `uv run ruff check`
-- [ ] run `uv run pyright`
+- [ ] run `make test`
+- [ ] run `make lint`
 
 ### Task 6: Final documentation
 

@@ -26,7 +26,7 @@ dependencies = [
 
 [dependency-groups]
 test = ["pytest>=9.0.2", "pytest-asyncio>=1.3.0"]
-lint = ["pyright>=1.1.409", "ruff>=0.15.1", "vulture>=2.14"]
+lint = ["ruff>=0.15.1", "ty>=0.0.41"]
 
 [build-system]
 requires = ["hatchling"]
@@ -48,9 +48,19 @@ line-length = 100
 target-version = "py313"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "RUF", "C4", "SIM"]
-ignore = ["RUF001", "RUF002", "RUF003", "RUF005", "RUF006", "SIM105"]
+select = ["E", "F", "I", "UP", "C4", "SIM"]
+ignore = ["E501", "UP035", "SIM105"]
 
-[tool.pyright]
+[tool.ty.src]
 include = ["apps", "clients", "strategy", "lib", "scripts"]
-typeCheckingMode = "standard"
+
+[tool.ty.environment]
+python-version = "3.13"
+python-platform = "all"
+
+[tool.ty.terminal]
+error-on-warning = true
+
+[tool.ty.rules]
+all = "error"
+missing-override-decorator = "ignore"

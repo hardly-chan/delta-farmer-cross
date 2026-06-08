@@ -295,7 +295,7 @@ async def main():
         if acc_cfg is None:
             names = ", ".join(acc.name for acc in cfg.accounts)
             parser.error(f"account '{args.account}' not found in {args.config}; available: {names}")
-    client = CLIENT_MAP[args.exchange].from_config(acc_cfg)  # type: ignore
+    client = CLIENT_MAP[args.exchange].from_config(acc_cfg)
 
     if args.symbol in cfg.symbols:
         parser.error(

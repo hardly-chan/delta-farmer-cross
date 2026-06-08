@@ -36,8 +36,11 @@ class DurationSec(int):
 
     @classmethod
     def __get_pydantic_core_schema__(cls, source_type, handler: GetCoreSchemaHandler):
-        t = [core_schema.int_schema(), core_schema.str_schema()]
-        return core_schema.no_info_after_validator_function(cls, core_schema.union_schema(t))
+        choices: list[core_schema.CoreSchema | tuple[core_schema.CoreSchema, str]] = [
+            core_schema.int_schema(),
+            core_schema.str_schema(),
+        ]
+        return core_schema.no_info_after_validator_function(cls, core_schema.union_schema(choices))
 
 
 class Range[T: (int, float)](BaseModel):

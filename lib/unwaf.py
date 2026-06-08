@@ -35,13 +35,14 @@ def _solve_challenge(token: str) -> str:
     p = _parse_token(token)
     M, seed2, seed3 = p["request_id"], p["seed2"], p["seed3"]
     initial_offset = (M * K[M % 5]) % 36
-    nonces, prev_hash = [], None
+    nonces: list[str] = []
+    prev_hash = ""
     for i in range(p["count"]):
         if i == 0:
             prefix = seed3[initial_offset : initial_offset + 4]
         else:
             offset = (M * K[(i - 1) % 5]) % p["difficulty"]
-            prefix = prev_hash[offset : offset + 4]  # type: ignore[index]
+            prefix = prev_hash[offset : offset + 4]
         nonce, prev_hash = _find_nonce(seed2, prefix)
         nonces.append(nonce)
     return ";".join(nonces)
