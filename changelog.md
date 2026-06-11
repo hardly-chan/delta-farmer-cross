@@ -1,3 +1,19 @@
+## v0.8.1 – 2026-06-12
+
+### Features
+
+- Added positional exchange filters to weekly reports, so a single exchange can be shown for a selected week.
+- Added burn efficiency per $100k of volume to weekly reports.
+
+### Fixes
+
+- Fixed RiseX open order parsing.
+- Fixed 01.xyz login and points authentication.
+
+**Full Changelog**: https://github.com/vladkens/delta-farmer/compare/v0.8.0...v0.8.1
+
+---
+
 ## v0.8.0 – 2026-06-06
 
 ### Features
