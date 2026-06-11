@@ -199,7 +199,9 @@ uv run scripts/weekly.py W14                # Конкретний тижден�
 uv run scripts/weekly.py 2026-W14           # Конкретна ISO week із роком
 uv run scripts/weekly.py --from W14 --to W22 # Зведення за діапазон тижнів
 uv run scripts/weekly.py -P --from W14 --to W22 # Деталізація тижнів у діапазоні
-uv run scripts/weekly.py -e Hyena           # Один exchange, усі доступні періоди
+uv run scripts/weekly.py Hyena              # Один exchange, усі доступні періоди
+uv run scripts/weekly.py Hyena 0            # Один exchange, остання cached ISO week
+uv run scripts/weekly.py -e Hyena           # Старий alias для одного exchange
 uv run scripts/weekly.py --burn             # Burn pivot за ISO week і exchange
 uv run scripts/weekly.py --help             # Повна довідка weekly report
 ```

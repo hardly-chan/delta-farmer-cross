@@ -9,7 +9,9 @@ To refresh data for an exchange, run its stats command first:
 Usage:
   uv run scripts/weekly.py              # snapshot: all exchanges, latest week
   uv run scripts/weekly.py -1           # snapshot: one week back
-  uv run scripts/weekly.py -e Hyena     # Hyena: all periods (vol/burn/pts)
+  uv run scripts/weekly.py Hyena        # Hyena: all periods (vol/burn/pts)
+  uv run scripts/weekly.py Hyena 0      # Hyena: latest week
+  uv run scripts/weekly.py -e Hyena     # legacy alias for Hyena
   uv run scripts/weekly.py --bonus      # include OFF/retro bonus points in totals
   uv run scripts/weekly.py --burn       # burn pivot: all exchanges × ISO weeks
 """
@@ -490,11 +492,36 @@ def _parse_period_arg(s: str) -> int | str:
 
 
 def _offset_week(week_arg: int) -> str | None:
-    weeks = sorted(_report_weeks())
-    if not weeks:
+    return _offset_week_from(_report_weeks(), week_arg)
+
+
+def _offset_week_from(weeks: set[str], week_arg: int) -> str | None:
+    sorted_weeks = sorted(weeks)
+    if not sorted_weeks:
         return None
-    idx = len(weeks) - 1 + week_arg
-    return weeks[idx] if idx >= 0 else None
+    idx = len(sorted_weeks) - 1 + week_arg
+    return sorted_weeks[idx] if idx >= 0 else None
+
+
+def _exchange_by_name(name: str):
+    return next((e for e in EXCHANGES if e[0].lower() == name.lower()), None)
+
+
+def _parse_targets(targets: list[str], exchange: str | None) -> tuple[str | None, int | str | None]:
+    period: int | str | None = None
+    for target in targets:
+        match = _exchange_by_name(target)
+        if match:
+            if exchange and exchange.lower() != match[0].lower():
+                raise argparse.ArgumentTypeError(
+                    f"Conflicting exchanges: {exchange!r} and {target!r}"
+                )
+            exchange = match[0]
+            continue
+        if period is not None:
+            raise argparse.ArgumentTypeError(f"Unexpected argument: {target!r}")
+        period = _parse_period_arg(target)
+    return exchange, period
 
 
 # MARK: Views
@@ -522,13 +549,13 @@ def _available_labels(
 
 
 def _selected_weeks(
-    week_arg: int | None, from_week: str | None, to_week: str | None
+    week_arg: int | None, from_week: str | None, to_week: str | None, weeks: set[str] | None = None
 ) -> tuple[str | None, str | None]:
     if from_week or to_week:
         return from_week, to_week
     if week_arg is None:
         return None, None
-    week = _offset_week(week_arg)
+    week = _offset_week_from(weeks, week_arg) if weeks is not None else _offset_week(week_arg)
     return week, week
 
 
@@ -543,6 +570,13 @@ def _report_columns(*, grouped: bool) -> list[Column]:
             "{:,.4f}",
             compute=lambda r: r["Burn"] / r["Points"],
             guard=lambda r: r["Points"] > 0,
+            grand_total=False,
+        ),
+        Column(
+            "$/100k",
+            "${:,.2f}",
+            compute=lambda r: r["Burn"] / r["Volume"] * Decimal("1e5"),
+            guard=lambda r: r["Volume"] >= Decimal("1000"),
             grand_total=False,
         ),
     ]
@@ -608,10 +642,15 @@ def report_view(
     return 0
 
 
-def exchange_view(name: str) -> int:
+def exchange_view(
+    name: str,
+    week_arg: int | None = None,
+    from_week: str | None = None,
+    to_week: str | None = None,
+) -> int:
     """One exchange, all available periods."""
     now = datetime.now(UTC)
-    match = next((e for e in EXCHANGES if e[0].lower() == name.lower()), None)
+    match = _exchange_by_name(name)
     if match is None:
         names = ", ".join(e[0] for e in EXCHANGES)
         print(f"Unknown exchange {name!r}. Available: {names}", file=sys.stderr)
@@ -623,6 +662,12 @@ def exchange_view(name: str) -> int:
         print("No cached data found.", file=sys.stderr)
         return 1
     available = _available_labels(periods, pts_map, current_period_fn, now)
+    if week_arg is not None or from_week or to_week:
+        weeks = set()
+        for label in available:
+            weeks |= {week for week in _period_end_weeks(label) if week <= _to_iso_week(now)}
+        from_week, to_week = _selected_weeks(week_arg, from_week, to_week, weeks)
+        available = [label for label in available if _label_in_weeks(label, from_week, to_week)]
     tbl = AutoTable(
         Column("Period", justify="left"),
         Column("Volume", "{:,.0f}", total=sum),
@@ -633,6 +678,13 @@ def exchange_view(name: str) -> int:
             "{:,.4f}",
             compute=lambda r: r["Burn"] / r["Points"],
             guard=lambda r: r["Points"] > 0,
+            grand_total=False,
+        ),
+        Column(
+            "$/100k",
+            "${:,.2f}",
+            compute=lambda r: r["Burn"] / r["Volume"] * Decimal("1e5"),
+            guard=lambda r: r["Volume"] >= Decimal("1000"),
             grand_total=False,
         ),
     )
@@ -647,7 +699,12 @@ def exchange_view(name: str) -> int:
     if not any_data:
         print("No cached data found.", file=sys.stderr)
         return 1
-    print(f"{exch_name} — all periods")
+    title = f"{exch_name} — all periods"
+    if from_week and to_week and from_week == to_week:
+        title = f"{exch_name} — {from_week}"
+    elif from_week or to_week:
+        title = f"{exch_name} — {from_week or '...'}..{to_week or '...'}"
+    print(title)
     tbl.print()
     return 0
 
@@ -680,15 +737,15 @@ def burn_view() -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Weekly trading report")
     parser.add_argument(
-        "week",
-        nargs="?",
-        type=_parse_period_arg,
+        "targets",
+        nargs="*",
         default=None,
-        help="0=latest; -N=N weeks back; W14/2026-W14=specific ISO week; omit=all time",
+        help=(
+            "exchange and/or week: Hyena; 0=latest; -N=N weeks back; "
+            "W14/2026-W14=specific ISO week; omit=all time"
+        ),
     )
-    parser.add_argument(
-        "-e", "--exchange", metavar="NAME", help="show all periods for one exchange"
-    )
+    parser.add_argument("-e", "--exchange", metavar="NAME", help="select one exchange")
     parser.add_argument(
         "-P",
         "--detail",
@@ -719,19 +776,27 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    try:
+        exchange, period_arg = _parse_targets(args.targets, args.exchange)
+    except argparse.ArgumentTypeError as e:
+        parser.error(str(e))
+
     if args.burn:
         rc = burn_view()
-    elif args.exchange:
-        rc = exchange_view(args.exchange)
+    elif exchange:
+        week_arg = period_arg if isinstance(period_arg, int) else None
+        from_week = args.from_week or (period_arg if isinstance(period_arg, str) else None)
+        to_week = args.to_week or (period_arg if isinstance(period_arg, str) else None)
+        rc = exchange_view(exchange, week_arg, from_week, to_week)
     else:
-        week_arg = args.week if isinstance(args.week, int) else None
-        from_week = args.from_week or (args.week if isinstance(args.week, str) else None)
-        to_week = args.to_week or (args.week if isinstance(args.week, str) else None)
+        week_arg = period_arg if isinstance(period_arg, int) else None
+        from_week = args.from_week or (period_arg if isinstance(period_arg, str) else None)
+        to_week = args.to_week or (period_arg if isinstance(period_arg, str) else None)
         rc = report_view(week_arg, from_week, to_week, detail=args.detail, include_bonus=args.bonus)
 
     if rc == 0:
         print("\033[2m  · cached data — run stats <exchange> to refresh\033[0m")
-        if not args.exchange and not args.burn:
+        if not exchange and not args.burn:
             print("\033[2m  · periods selected by protocol end ISO week\033[0m")
     return rc
 
