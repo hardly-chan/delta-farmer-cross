@@ -2,9 +2,11 @@
 # Copyright (c) vladkens | MIT License | Built by humans, blamed on AI
 import asyncio
 import base64
+import hashlib
 import json
 import re
 import time
+import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Self
@@ -43,8 +45,12 @@ NORD_API = "https://zo-mainnet.n1.xyz"
 TURNKEY_API = "https://api.turnkey.com"
 TURNKEY_ORG_ID = "497f60f3-57cd-4aec-af39-7415c2fafaab"
 ZERO1_JANUS_LOGIN_PATH = "/api/janus/v1/auth/wallet/login"
+ZERO1_JANUS_CHALLENGE_PATH = "/api/janus/v1/auth/wallet/challenge"
 
 ZERO1_APP = "https://01.xyz"
+N1_SESSION_STAMP_PREFIX = "N1-SESSION-STAMP-V1"
+N1_AUTH_IDENTIFY_PATH = "/v1/auth/identify"
+N1_AUTH_IDENTIFY_BODY = "{}"
 _POINTS_GENESIS = datetime(2026, 2, 3, tzinfo=UTC)  # week 1 start (Tuesday)
 
 # last know values. can be changed on next deployment, but code have auto-discovery fallback
@@ -214,8 +220,9 @@ class ZeroOneTurnkey:
             .hex()
         )
         self._sub_org_id: str | None = None
+        self._session_token: str | None = None
 
-        headers: dict[str, str] = {}
+        headers = {"Referer": f"{ZERO1_APP}/", "Origin": ZERO1_APP}
         self._janus = AsyncHttp(baseurl=ZERO1_APP, headers=headers, proxy=proxy)
         self._api = AsyncHttp(baseurl=TURNKEY_API, headers=headers, proxy=proxy)
 
@@ -271,6 +278,21 @@ class ZeroOneTurnkey:
     @ttl_cache(86400)
     async def login(self) -> str:
         """Authenticate via EVM key → Turnkey (via Janus proxy) → returns Solana address."""
+        challenge_payload = {
+            "sessionPublicKey": self._ephem_pubkey_hex,
+            "walletAddress": self._evm_account.address.lower(),
+            "network": "ethereum",
+        }
+        challenge_rep = await self._janus.request(
+            "POST", ZERO1_JANUS_CHALLENGE_PATH, json=challenge_payload
+        )
+        if not challenge_rep.ok:
+            raise ApiError("Turnkey wallet challenge via Janus failed", challenge_rep)
+
+        challenge = challenge_rep.json().get("data")
+        if not isinstance(challenge, dict) or not challenge.get("challengeId"):
+            raise ApiError("Turnkey wallet challenge via Janus returned invalid data")
+
         body = json.dumps(
             {
                 "parameters": {
@@ -292,6 +314,10 @@ class ZeroOneTurnkey:
                 "url": f"{TURNKEY_API}/public/v1/submit/stamp_login",
             },
             "expectedAddress": self._evm_account.address.lower(),
+            "challenge": {
+                "challengeId": challenge["challengeId"],
+                "nonce": challenge["nonce"],
+            },
         }
         rep = await self._janus.request("POST", ZERO1_JANUS_LOGIN_PATH, json=payload)
         if not rep.ok:
@@ -299,6 +325,7 @@ class ZeroOneTurnkey:
 
         rep_data = rep.json()["data"]
         session_token = rep_data["session"]["sessionToken"]
+        self._session_token = session_token
         user = rep_data.get("identifyData", {}).get("user", {})
         self._sub_org_id = user.get("turnkeySuborgId") or self._jwt_org_id(session_token)
 
@@ -314,6 +341,33 @@ class ZeroOneTurnkey:
             if acc.get("curve") == "CURVE_ED25519":
                 return acc["address"]
         raise ApiError("Turnkey Ed25519 wallet not found")
+
+    async def n1_auth_headers(self) -> dict[str, str]:
+        """Build N1 session-proof headers for authenticated 01.xyz API routes."""
+        await self.login()
+        assert self._session_token is not None
+
+        timestamp_ms = str(int(time.time() * 1000))
+        nonce = str(uuid.uuid4())
+        body_hash = hashlib.sha256(N1_AUTH_IDENTIFY_BODY.encode()).hexdigest()
+        proof = "\n".join(
+            [
+                N1_SESSION_STAMP_PREFIX,
+                "POST",
+                N1_AUTH_IDENTIFY_PATH,
+                body_hash,
+                timestamp_ms,
+                nonce,
+            ]
+        )
+
+        return {
+            "Authorization": f"Bearer {self._session_token}",
+            "Content-Type": "application/json",
+            "X-N1-Session-Stamp": self._stamp_p256(proof.encode()),
+            "X-N1-Session-Timestamp": timestamp_ms,
+            "X-N1-Session-Nonce": nonce,
+        }
 
     async def sign_payload(self, payload_hex: str) -> bytes:
         """Sign Nord action payload (hex string) via Turnkey managed Ed25519 key."""
@@ -808,9 +862,12 @@ class ZeroOneClient:
             logger.warning(f"Points auth cookie not found ({rep.status_code})")
 
     async def _fetch_points(self, solana_addr: str, acc_id: int) -> dict:
-        await self._ensure_points_auth(solana_addr, acc_id)
+        await ensure_unwaf(self.http, f"{ZERO1_APP}/")
+        headers = await self._turnkey.n1_auth_headers()
+        headers["Referer"] = f"{ZERO1_APP}/points"
+
         url = f"{ZERO1_APP}/api/points?walletAddress={solana_addr}"
-        rep = await self.http.request("GET", url)
+        rep = await self.http.request("GET", url, headers=headers)
         if rep.status_code != 200:
             logger.warning(f"Failed to fetch points: {rep.status_code} {rep.text}")
 
@@ -819,12 +876,12 @@ class ZeroOneClient:
     async def _points(self, solana_addr: str, acc_id: int) -> tuple[Decimal, int | None]:
         data = await self._fetch_points(solana_addr, acc_id)
         lb = data.get("leaderboardData", {}) or {}
-        points = Decimal(str(lb.get("points", 0)))
+        points = sum(
+            (Decimal(str(d.get("points", 0))) for d in data.get("data", [])),
+            Decimal(0),
+        )
         if not points:
-            points = sum(
-                (Decimal(str(d.get("points", 0))) for d in data.get("data", [])),
-                Decimal(0),
-            )
+            points = Decimal(str(lb.get("points", 0)))
         return points, lb.get("rank")
 
     async def points_history(self) -> list[ZeroOnePoint]:
