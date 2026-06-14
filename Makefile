@@ -1,19 +1,23 @@
-.PHONY: prepare lint test update update-dev clean deploy logs foreach info proxy stats-was stats-now
+.PHONY: prepare check update update-dev clean deploy logs foreach info proxy stats-was stats-now
 
 FOREACH_CLT := $(filter-out hyperliquid vault,$(basename $(notdir $(wildcard apps/*.py))))
 FOREACH_CMD := $(strip $(cmd) $(if $(filter all,$(p)),,$(p)))
 FOREACH_RUN = echo "\n── $(1) ──" && uv run -m apps.$(1) $(FOREACH_CMD) --no-banner || exit $$?
 
-prepare: lint test
-	uv lock --check
-
-lint:
+prepare:
 	uv run ruff format .
 	uv run ruff check --fix .
 	uv run ty check
-
-test:
 	uv run pytest -v
+	uv lock --check
+
+check:
+	uv lock --check
+	uv sync --locked --all-groups
+	uv run --locked ruff format --check .
+	uv run --locked ruff check .
+	uv run --locked ty check
+	uv run --locked pytest -v
 
 update:
 	uv lock --upgrade

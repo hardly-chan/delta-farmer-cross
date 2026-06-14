@@ -23,6 +23,12 @@ APP_URL = "https://omni.variational.io"
 _POINTS_GENESIS = datetime(2025, 12, 17 - 6, tzinfo=UTC)
 
 
+def _volume_field_total(value: Any) -> Decimal:
+    if isinstance(value, dict):
+        value = value.get("total") or value.get("current")
+    return Decimal(str(value or "0"))
+
+
 class IndicativeQuote(BaseModel):
     quote_id: str
     mark_price: Decimal
@@ -462,7 +468,7 @@ class OmniClient:
 
     async def total_volume(self):
         res = await self._call("GET", "/referrals/summary")
-        vol = Decimal(res.get("trade_volume", {}).get("current") or "0")
+        vol = _volume_field_total(res.get("own_volume") or res.get("trade_volume"))
         ref: str | None = res.get("referred_by", {}).get("code") or None
         return vol, ref
 

@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from clients.omni import OmniClient, OmniCompetitionStatus, OmniSupportedAsset
+from clients.omni import OmniClient, OmniCompetitionStatus, OmniSupportedAsset, _volume_field_total
 
 
 async def test_omni_rwa_commodity_instrument_payload():
@@ -87,3 +87,12 @@ def test_omni_competition_status_parses_registered_response():
     assert status.user.volume_total == Decimal("1234.5")
     assert status.user.pnl_total == Decimal("-1.25")
     assert status.user.roi_rank == 30
+
+
+def test_omni_volume_field_total_parses_referral_shapes():
+    assert _volume_field_total({"current": "907128.910420", "goal": "1000000"}) == Decimal(
+        "907128.910420"
+    )
+    assert _volume_field_total({"total": "2006120.351582", "last_24h": "0"}) == Decimal(
+        "2006120.351582"
+    )

@@ -1,14 +1,18 @@
-## v0.8.1 – 2026-06-12
+## v0.8.1 – 2026-06-14
 
 ### Features
 
+- Added a unified command bridge for routing common commands and exchange-specific tools.
 - Added positional exchange filters to weekly reports, so a single exchange can be shown for a selected week.
 - Added burn efficiency per $100k of volume to weekly reports.
+- Added weekly report sorting by name, volume, or burn.
 
 ### Fixes
 
-- Fixed RiseX open order parsing.
 - Fixed 01.xyz login and points authentication.
+- Fixed RiseX open order parsing.
+- Fixed weekly reports to include RiseX cached trading stats.
+- Fixed Omni info volume reporting for accounts with their own referral code.
 
 **Full Changelog**: https://github.com/vladkens/delta-farmer/compare/v0.8.0...v0.8.1
 

@@ -32,6 +32,7 @@ from clients.nado import NadoClient
 from clients.omni import OmniClient
 from clients.onyx import OnyxClient
 from clients.pacifica import PacificaClient
+from clients.rise import RiseClient
 from clients.zero1 import ZeroOneClient
 from lib.table import AutoTable, Column
 
@@ -190,6 +191,18 @@ def onyx_stats() -> Stats:
     return out
 
 
+def rise_stats() -> Stats:
+    out: Stats = {}
+    for path in glob_cache("rise_", "_trades.pkl"):
+        for r in load_pkl(path):
+            dt = datetime.fromtimestamp(int(r["time"]) / 1_000_000_000, tz=UTC)
+            lbl = RiseClient.to_week_label(dt)
+            vol, burn = out.get(lbl, (Decimal(0), Decimal(0)))
+            vol += Decimal(str(r["price"])) * Decimal(str(r["size"]))
+            out[lbl] = (vol, burn - Decimal(str(r.get("realized_pnl", 0))))
+    return out
+
+
 # MARK: Points extractors
 
 
@@ -258,6 +271,10 @@ def onyx_pts() -> Pts:
     return _pts_by_period(
         "onyx_", "_points.pkl", "start_window", ["points"], OnyxClient.to_week_label
     )
+
+
+def rise_pts() -> Pts:
+    return {}
 
 
 # MARK: ISO-week extractors (vol + burn + pts)
@@ -368,6 +385,17 @@ def pacifica_burn_weeks() -> ISOData:
     return {k: (v[0], v[1], v[2]) for k, v in out.items()}
 
 
+def rise_burn_weeks() -> ISOData:
+    out = _isoout()
+    for path in glob_cache("rise_", "_trades.pkl"):
+        for r in load_pkl(path):
+            dt = datetime.fromtimestamp(int(r["time"]) / 1_000_000_000, tz=UTC)
+            w = _to_iso_week(dt)
+            out[w][0] += Decimal(str(r["price"])) * Decimal(str(r["size"]))
+            out[w][1] -= Decimal(str(r.get("realized_pnl", 0)))
+    return {k: (v[0], v[1], v[2]) for k, v in out.items()}
+
+
 def zero1_burn_weeks() -> ISOData:
     out = _isoout()
     seen: set[str] = set()
@@ -406,6 +434,7 @@ EXCHANGES: list[tuple[str, Any, Any, Any | None]] = [
     ("Omni", omni_stats, omni_pts, None),
     ("Onyx", onyx_stats, onyx_pts, OnyxClient.to_week_label),
     ("Pacifica", pacifica_stats, pacifica_pts, None),
+    ("Rise", rise_stats, rise_pts, RiseClient.to_week_label),
     ("Zero1", zero1_stats, zero1_pts, None),
 ]
 
@@ -416,6 +445,7 @@ BURN_EXCHANGES = [
     ("Omni", omni_burn_weeks),
     ("Onyx", onyx_burn_weeks),
     ("Pacifica", pacifica_burn_weeks),
+    ("Rise", rise_burn_weeks),
     ("Zero1", zero1_burn_weeks),
 ]
 
@@ -582,6 +612,18 @@ def _report_columns(*, grouped: bool) -> list[Column]:
     ]
 
 
+def _sort_report_rows(
+    rows: list[tuple[str, list[str], Decimal, Decimal, Decimal, Decimal]], sort: str
+) -> list[tuple[str, list[str], Decimal, Decimal, Decimal, Decimal]]:
+    match sort:
+        case "v" | "volume":
+            return sorted(rows, key=lambda r: (r[3], r[0]), reverse=True)
+        case "b" | "burn":
+            return sorted(rows, key=lambda r: (r[4], r[0]), reverse=True)
+        case _:
+            return sorted(rows, key=lambda r: r[0])
+
+
 def report_view(
     week_arg: int | None = None,
     from_week: str | None = None,
@@ -589,6 +631,7 @@ def report_view(
     *,
     detail: bool = False,
     include_bonus: bool = False,
+    sort: str = "name",
 ) -> int:
     """Project report over protocol periods selected by end ISO-week."""
     from_week, to_week = _selected_weeks(week_arg, from_week, to_week)
@@ -597,6 +640,7 @@ def report_view(
         gtitle="Exchange",
     )
     any_data = False
+    rows: list[tuple[str, list[str], Decimal, Decimal, Decimal, Decimal]] = []
 
     for name, stats_fn, pts_fn, _ in EXCHANGES:
         periods = stats_fn()
@@ -614,30 +658,40 @@ def report_view(
         if not labels and not extra_pts:
             continue
 
-        if detail:
-            tbl.subgroup(name)
-            for label in labels:
-                vol, burn = periods.get(label, (Decimal(0), Decimal(0)))
-                pts = pts_map.get(label, Decimal(0))
-                tbl.add_row(label, vol, burn, pts)
-            if extra_pts:
-                tbl.add_row("Bonus", Decimal(0), Decimal(0), extra_pts)
-        else:
-            vol = sum(
-                (periods.get(label, (Decimal(0), Decimal(0)))[0] for label in labels),
-                Decimal(0),
-            )
-            burn = sum(
-                (periods.get(label, (Decimal(0), Decimal(0)))[1] for label in labels),
-                Decimal(0),
-            )
-            pts = sum((pts_map.get(label, Decimal(0)) for label in labels), Decimal(0)) + extra_pts
-            tbl.add_row(name, vol, burn, pts)
+        vol = sum(
+            (periods.get(label, (Decimal(0), Decimal(0)))[0] for label in labels),
+            Decimal(0),
+        )
+        burn = sum(
+            (periods.get(label, (Decimal(0), Decimal(0)))[1] for label in labels),
+            Decimal(0),
+        )
+        pts = sum((pts_map.get(label, Decimal(0)) for label in labels), Decimal(0)) + extra_pts
+        rows.append((name, labels, extra_pts, vol, burn, pts))
         any_data = True
 
     if not any_data:
         print("No cached data found.", file=sys.stderr)
         return 1
+    rows = _sort_report_rows(rows, sort)
+
+    for name, labels, extra_pts, vol, burn, pts in rows:
+        if detail:
+            match = _exchange_by_name(name)
+            if match is None:
+                continue
+            _, stats_fn, pts_fn, _ = match
+            periods = stats_fn()
+            pts_map = pts_fn()
+            tbl.subgroup(name)
+            for label in labels:
+                period_vol, period_burn = periods.get(label, (Decimal(0), Decimal(0)))
+                tbl.add_row(label, period_vol, period_burn, pts_map.get(label, Decimal(0)))
+            if extra_pts:
+                tbl.add_row("Bonus", Decimal(0), Decimal(0), extra_pts)
+        else:
+            tbl.add_row(name, vol, burn, pts)
+
     tbl.print()
     return 0
 
@@ -769,6 +823,12 @@ def main() -> int:
     )
     parser.add_argument("--burn", action="store_true", help="burn pivot: all exchanges × ISO weeks")
     parser.add_argument(
+        "--sort",
+        choices=["n", "name", "v", "volume", "b", "burn"],
+        default="name",
+        help="sort summary rows: n/name, v/volume, b/burn",
+    )
+    parser.add_argument(
         "--bonus",
         "--include-bonus",
         action="store_true",
@@ -792,7 +852,14 @@ def main() -> int:
         week_arg = period_arg if isinstance(period_arg, int) else None
         from_week = args.from_week or (period_arg if isinstance(period_arg, str) else None)
         to_week = args.to_week or (period_arg if isinstance(period_arg, str) else None)
-        rc = report_view(week_arg, from_week, to_week, detail=args.detail, include_bonus=args.bonus)
+        rc = report_view(
+            week_arg,
+            from_week,
+            to_week,
+            detail=args.detail,
+            include_bonus=args.bonus,
+            sort=args.sort,
+        )
 
     if rc == 0:
         print("\033[2m  · cached data — run stats <exchange> to refresh\033[0m")
