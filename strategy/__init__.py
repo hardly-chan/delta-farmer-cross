@@ -19,4 +19,6 @@ from .models import (
     opposite_side,
     usd_to_qty,
 )
+from .spread_models import SpreadConfig
+from .spread_trade import SpreadPlan
 from .trade import DeltaLeg, DeltaTrade, DeltaTradeSummary

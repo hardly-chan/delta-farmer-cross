@@ -1,0 +1,88 @@
+from decimal import Decimal
+
+import pytest
+
+from strategy.spread_trade import (
+    SpreadPlan,
+    calc_cross_spread_pct,
+    detect_spread_direction,
+    open_spread,
+)
+
+
+class MockClient:
+    def __init__(self, name: str, fail_open: bool = False):
+        self.name = name
+        self.fail_open = fail_open
+        self.calls: list[tuple[str, str, Decimal, bool]] = []
+
+    async def market_order(self, symbol: str, side: str, qty: Decimal, reduce_only=False):
+        self.calls.append((symbol, side, qty, reduce_only))
+        if self.fail_open and not reduce_only:
+            raise RuntimeError(f"{self.name} open failure")
+        return {"ok": True}
+
+
+def test_calc_cross_spread_pct():
+    spread = calc_cross_spread_pct(Decimal("100"), Decimal("100.1"))
+    assert spread == Decimal("0.1")
+
+
+def test_detect_spread_direction_omni_long():
+    result = detect_spread_direction(
+        omni_bid=Decimal("100"),
+        omni_ask=Decimal("100.00"),
+        nado_bid=Decimal("100.20"),
+        nado_ask=Decimal("100.30"),
+        min_open_spread_pct=Decimal("0.1"),
+    )
+
+    assert result == ("omni_long", Decimal("0.2"))
+
+
+def test_detect_spread_direction_nado_long():
+    result = detect_spread_direction(
+        omni_bid=Decimal("100.20"),
+        omni_ask=Decimal("100.30"),
+        nado_bid=Decimal("100"),
+        nado_ask=Decimal("100.00"),
+        min_open_spread_pct=Decimal("0.1"),
+    )
+
+    assert result == ("nado_long", Decimal("0.2"))
+
+
+def test_detect_spread_direction_none_when_below_threshold():
+    result = detect_spread_direction(
+        omni_bid=Decimal("100"),
+        omni_ask=Decimal("100.05"),
+        nado_bid=Decimal("100.09"),
+        nado_ask=Decimal("100.12"),
+        min_open_spread_pct=Decimal("0.1"),
+    )
+
+    assert result is None
+
+
+async def test_open_spread_rolls_back_when_one_leg_fails():
+    long_client = MockClient("omni")
+    short_client = MockClient("nado", fail_open=True)
+    plan = SpreadPlan(
+        symbol="BTC",
+        direction="omni_long",
+        long_client=long_client,
+        short_client=short_client,
+        long_entry_price=Decimal("100"),
+        short_entry_price=Decimal("100.2"),
+        spread_pct=Decimal("0.2"),
+        qty=Decimal("1"),
+    )
+
+    with pytest.raises(RuntimeError, match="short leg failed"):
+        await open_spread(plan)
+
+    assert long_client.calls == [
+        ("BTC", "bid", Decimal("1"), False),
+        ("BTC", "ask", Decimal("1"), True),
+    ]
+    assert short_client.calls == [("BTC", "ask", Decimal("1"), False)]
