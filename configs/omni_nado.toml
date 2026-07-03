@@ -1,0 +1,38 @@
+# Omni/Nado cross-exchange spread strategy
+symbol = "BTC"
+leverage = 10
+
+# Open when long-side ask is cheaper than short-side bid by at least this percent.
+min_open_spread_pct = 0.10
+# Close when spread compresses to this level or lower.
+min_close_spread_pct = 0.02
+
+# Exactly one sizing mode is required.
+trade_size_usd = { min = 120, max = 150 }
+# trade_size_pct = 0.4
+
+poll_interval = "3s"
+position_check_interval = "5s"
+max_open_duration = "20m"
+cooldown_after_close = "1m"
+
+# 0 means infinite retries.
+max_failures = 0
+
+[omni]
+name = "omni-main"
+privkey = "your-private-key-here"
+# proxy = "http://user:pass@host:port"
+enabled = true
+
+[nado]
+name = "nado-main"
+privkey = "your-private-key-here"
+# proxy = "http://user:pass@host:port"
+enabled = true
+
+# [telegram]
+# token = "bot-token"
+# chat_id = "123456789"
+# notify = ["start", "stop", "errors", "reports"]
+# report_interval = "1h"
