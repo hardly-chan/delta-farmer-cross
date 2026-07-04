@@ -104,3 +104,22 @@ def test_spread_config_uses_min_open_time():
     )
 
     assert int(cfg.min_open_time) == 7 * 60
+
+
+def test_spread_config_accepts_safety_limits():
+    cfg = SpreadConfig.model_validate(
+        {
+            "symbol": "BTC",
+            "leverage": 10,
+            "trade_size_usd": [100, 120],
+            "min_open_spread_pct": "0.1",
+            "min_close_spread_pct": "0.02",
+            "max_abs_pnl_usd": "30",
+            "max_abs_roi": "0.05",
+            "omni": {"name": "o", "privkey": "x" * 32},
+            "nado": {"name": "n", "privkey": "x" * 32},
+        }
+    )
+
+    assert cfg.max_abs_pnl_usd == Decimal("30")
+    assert cfg.max_abs_roi == Decimal("0.05")

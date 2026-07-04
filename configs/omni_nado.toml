@@ -6,6 +6,10 @@ leverage = 10
 min_open_spread_pct = 0.10
 # Close when spread compresses to this level or lower.
 min_close_spread_pct = 0.02
+# Emergency close if absolute combined PnL reaches this USD value.
+# max_abs_pnl_usd = 25
+# Emergency close if absolute combined ROI reaches this value (0.05 = 5%).
+# max_abs_roi = 0.05
 
 # Exactly one sizing mode is required.
 trade_size_usd = { min = 120, max = 150 }

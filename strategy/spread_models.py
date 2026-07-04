@@ -20,6 +20,8 @@ class SpreadConfig(BaseModel):
 
     min_open_spread_pct: Decimal = Field(Decimal("0.10"), gt=0)
     min_close_spread_pct: Decimal = Field(Decimal("0.02"), ge=0)
+    max_abs_pnl_usd: Decimal | None = Field(None, gt=0)
+    max_abs_roi: Decimal | None = Field(None, gt=0)
 
     poll_interval: DurationSec = DurationSec("3s")
     position_check_interval: DurationSec = DurationSec("5s")
