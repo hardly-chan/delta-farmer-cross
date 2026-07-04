@@ -119,12 +119,13 @@ class SpreadStrategy:
 
     async def _try_open_trade(self) -> SpreadPlan | None:
         omni_bid, omni_ask, nado_bid, nado_ask = await self._bbo()
-        signal = detect_spread_direction(
+        signal, omni_val, nado_val = detect_spread_direction(
             omni_bid, omni_ask, nado_bid, nado_ask, self.cfg.min_open_spread_pct
         )
         if signal is None:
             logger.debug(
-                f"No signal {self.cfg.symbol}: omni=({omni_bid}/{omni_ask}) nado=({nado_bid}/{nado_ask})"
+                f"No signal {self.cfg.symbol}: omni=({omni_bid}/{omni_ask}) nado=({nado_bid}/{nado_ask}) "
+		f"max_spread = {max(omni_val, nado_val):.3f}%"
             )
             return None
 

@@ -50,9 +50,11 @@ def detect_spread_direction(
         candidates.append(("nado_long", nado_long))
 
     if not candidates:
-        return None
-
-    return max(candidates, key=lambda x: x[1])
+        return None, omni_long, nado_long
+    
+    best_candidate = max(candidates, key=lambda x: x[1])
+    
+    return best_candidate, omni_long, nado_long
 
 
 async def aligned_qty(

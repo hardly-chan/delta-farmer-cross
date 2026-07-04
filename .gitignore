@@ -10,5 +10,5 @@ __pycache__/
 *.har
 *.pyc
 *.txt
-#configs/
+configs/omni_nado.toml
 logs/
