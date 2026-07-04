@@ -1,5 +1,4 @@
 import asyncio
-import time
 from decimal import Decimal
 
 from lib import telegram as tg
@@ -41,7 +40,7 @@ class SpreadStrategy:
 
         failures = 0
         active_plan: SpreadPlan | None = None
-        opened_at = 0.0
+        hold_ready = False
 
         while True:
             if self.stop_event and self.stop_event.is_set():
@@ -57,7 +56,15 @@ class SpreadStrategy:
                         continue
 
                     failures = 0
-                    opened_at = time.time()
+                    hold_ready = False
+
+                    # Keep the spread open for a minimum hold window before checking close conditions.
+                    await self._wait(self.cfg.min_open_time)
+                    hold_ready = True
+                    continue
+
+                if not hold_ready:
+                    await self._wait(self.cfg.position_check_interval)
                     continue
 
                 now_spread = await self._plan_spread(active_plan)
@@ -67,14 +74,7 @@ class SpreadStrategy:
                     )
                     await close_spread(active_plan)
                     active_plan = None
-                    await self._wait(self.cfg.cooldown_after_close)
-                    continue
-
-                elapsed = time.time() - opened_at
-                if elapsed >= int(self.cfg.max_open_duration):
-                    logger.info("Max open duration reached, closing spread")
-                    await close_spread(active_plan)
-                    active_plan = None
+                    hold_ready = False
                     await self._wait(self.cfg.cooldown_after_close)
                     continue
 
@@ -89,6 +89,7 @@ class SpreadStrategy:
                         await close_spread(active_plan)
                     finally:
                         active_plan = None
+                        hold_ready = False
 
                 failures += 1
                 logger.warning(f"Spread cycle failed ({failures}): {type(e).__name__}: {e}")

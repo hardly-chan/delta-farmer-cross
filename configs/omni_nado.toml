@@ -13,7 +13,7 @@ trade_size_usd = { min = 120, max = 150 }
 
 poll_interval = "3s"
 position_check_interval = "5s"
-max_open_duration = "20m"
+min_open_time = "20m"
 cooldown_after_close = "1m"
 
 # 0 means infinite retries.

@@ -23,7 +23,7 @@ class SpreadConfig(BaseModel):
 
     poll_interval: DurationSec = DurationSec("3s")
     position_check_interval: DurationSec = DurationSec("5s")
-    max_open_duration: DurationSec = DurationSec("20m")
+    min_open_time: DurationSec = DurationSec("20m")
     cooldown_after_close: DurationSec = DurationSec("1m")
 
     max_failures: int = Field(0, ge=0)

@@ -2,6 +2,7 @@ from decimal import Decimal
 
 import pytest
 
+from strategy.spread_models import SpreadConfig
 from strategy.spread_trade import (
     SpreadPlan,
     calc_cross_spread_pct,
@@ -86,3 +87,20 @@ async def test_open_spread_rolls_back_when_one_leg_fails():
         ("BTC", "ask", Decimal("1"), True),
     ]
     assert short_client.calls == [("BTC", "ask", Decimal("1"), False)]
+
+
+def test_spread_config_uses_min_open_time():
+    cfg = SpreadConfig.model_validate(
+        {
+            "symbol": "BTC",
+            "leverage": 10,
+            "trade_size_usd": [100, 120],
+            "min_open_spread_pct": "0.1",
+            "min_close_spread_pct": "0.02",
+            "min_open_time": "7m",
+            "omni": {"name": "o", "privkey": "x" * 32},
+            "nado": {"name": "n", "privkey": "x" * 32},
+        }
+    )
+
+    assert int(cfg.min_open_time) == 7 * 60
