@@ -89,6 +89,21 @@ async def test_open_spread_rolls_back_when_one_leg_fails():
     assert short_client.calls == [("BTC", "ask", Decimal("1"), False)]
 
 
+def test_open_and_close_spread_use_opposite_book_sides():
+    # Entry (omni_long): buy at omni_ask, sell at nado_bid → entry spread uses ask/bid.
+    # Exit (omni_long): sell at omni_bid, buy back at nado_ask → exit spread uses bid/ask.
+    # When prices fully converge (same mid), the exit spread must drop to ~0, not stay
+    # stuck at the bid-ask gap.
+    omni_bid, omni_ask = Decimal("99.99"), Decimal("100.01")
+    nado_bid, nado_ask = Decimal("99.99"), Decimal("100.01")
+
+    entry_spread = calc_cross_spread_pct(omni_ask, nado_bid)
+    exit_spread = calc_cross_spread_pct(omni_bid, nado_ask)
+
+    assert entry_spread == exit_spread
+    assert abs(exit_spread) < Decimal("0.05")  # converges to ~0 at price convergence
+
+
 def test_spread_config_uses_min_open_time():
     cfg = SpreadConfig.model_validate(
         {

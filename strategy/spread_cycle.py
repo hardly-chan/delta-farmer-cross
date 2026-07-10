@@ -312,10 +312,15 @@ class SpreadStrategy:
 
     async def _plan_metrics(self, plan: SpreadPlan) -> tuple[Decimal, Decimal, Decimal]:
         omni_bid, omni_ask, nado_bid, nado_ask = await self._bbo()
+        # Exit spread uses CLOSE prices — the opposite side of the book from entry:
+        #   omni_long: opened by buying at omni_ask / selling at nado_bid;
+        #              closed by selling at omni_bid / buying back at nado_ask.
+        #   nado_long: opened by buying at nado_ask / selling at omni_bid;
+        #              closed by selling at nado_bid / buying back at omni_ask.
         if plan.direction == "omni_long":
-            spread = calc_cross_spread_pct(omni_ask, nado_bid)
+            spread = calc_cross_spread_pct(omni_bid, nado_ask)
         else:
-            spread = calc_cross_spread_pct(nado_ask, omni_bid)
+            spread = calc_cross_spread_pct(nado_bid, omni_ask)
 
         long_price, short_price = await asyncio.gather(
             plan.long_client.get_price(plan.symbol),
@@ -360,3 +365,7 @@ class SpreadStrategy:
     async def _wait(self, wait_sec: int) -> None:
         logger.info(utils.wait_msg(wait_sec))
         await utils.interruptible_sleep(wait_sec, self.stop_event)
+
+
+
+
